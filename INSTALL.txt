@@ -1,0 +1,24 @@
+JIMMY TWEAKS — macOS 27 or later, Apple silicon
+
+1. Drag Jimmy Tweaks to Applications.
+2. Open Jimmy Tweaks from Applications.
+3. Follow or skip the permission assistant. You can relaunch it from Status.
+
+Hold Command and right-drag near any window corner to resize it.
+Hold Command and left-drag inside a window to move it.
+Moving uses a configurable 5-point drag threshold by default.
+Release Command or the mouse to finish. Escape tries restoring the original frame.
+
+Closing Settings leaves enabled features running in the background.
+Open the app again from Applications to change settings.
+Suspend All persists across launches. Use Quit Jimmy Tweaks to stop the process.
+
+Reoccurring Scripts is a NONFUNCTIONAL UI STUB. Nothing is fetched,
+scheduled, or executed. Its history is fictional sample data.
+
+Window support depends on macOS and each application's Accessibility behavior.
+Threshold mode can briefly delay ordinary Command-clicks.
+
+A local ad-hoc signed build is for local development and has not been notarized.
+Only a distribution explicitly built with Developer ID credentials and notarized
+through the included workflow should be represented as a notarized release.

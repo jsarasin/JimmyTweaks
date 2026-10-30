@@ -1,0 +1,36 @@
+Desktop retry after the user reported granting the requested permissions.
+Date: 2026-10-30. Times below are UTC, transcribed from the real probe UI.
+Overall result: UNVERIFIED; no production implementation authorized by this result.
+
+21:52:16 Startup log: probe PID 8506, macOS 27.0.1 build 26A434.
+Accessibility trusted: true
+Input posting permitted: true
+Running application count: 107
+Private classes and method signatures match the first run.
+
+21:52:16 and 21:52:36 Discovery:
+app.monitorcontrol.MonitorControl: pid=8359 terminated=false AXExtrasMenuBar error=0
+com.lujjjh.LinearMouse: pid=959 terminated=false AXExtrasMenuBar error=0
+MonitorControl item=0 identifier/title empty; frame=(2078,3,38,24), actions=[AXPress].
+LinearMouse item=0 identifier/title empty; frame=(2114,3,40,24), actions=[AXPress].
+
+21:52:50 Hide request for ONLY app.monitorcontrol.MonitorControl;
+81 other running bundle IDs and system item identifiers 0...8 allowed.
+API activation completed without error; target still registered=true.
+21:52:51 Running application list changed; fail-open release.
+
+21:52:54 Invocation left: restriction released and target rediscovered with
+unchanged PID/frame. Target-owner hit test accepted. Left mouse down/up posted
+at (2097,15). No original brightness menu/display response was visually verified.
+
+21:53:14 Restore All requested; invalidate called.
+Probe left open with the assertion released.
+
+Computer-use screenshot of MenuBarAgent showed a transparent/blank bar with the
+computer-use indicator, not the visible status-item glyphs. Its AX tree contained
+app/menu structures but is not proof of rendered visibility. MonitorControl's
+app screenshot showed only a tiny gamma enforcer window, so it did not establish
+whether the original brightness interface opened. No slider was changed.
+
+No right-click or SIGKILL test was performed. No isolation claim is made.
+The one-second automatic release prevents treating this as a completed hiding test.

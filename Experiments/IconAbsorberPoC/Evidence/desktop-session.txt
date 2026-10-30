@@ -1,0 +1,26 @@
+Desktop-session observations captured from the real probe's Accessibility tree.
+This is a transcription of the UI log, not an automated acceptance result.
+
+2026-10-30T21:48:04Z PROOF OF CONCEPT: UNVERIFIED — API success never implies visual acceptance.
+2026-10-30T21:48:04Z OS: Version 27.0.1 (Build 26A434)
+2026-10-30T21:48:04Z PID: 8371
+2026-10-30T21:48:04Z Accessibility trusted: false
+2026-10-30T21:48:04Z Input posting permitted: false
+2026-10-30T21:48:04Z Running application count: 96
+2026-10-30T21:48:04Z dlopen=YES; compatible method signatures=YES
+MBAssessmentModeConfiguration present=YES
+  initWithAllowedSystemItems:allowedBundleIdentifiers: @32@0:8@16@24
+MBAssessmentModeAssertion present=YES
+  activateWithConfiguration:completionHandler: v32@0:8@16@?24
+  invalidate v16@0:8
+2026-10-30T21:48:04Z Discovery starts with restriction released.
+2026-10-30T21:48:04Z app.monitorcontrol.MonitorControl: pid=8359 terminated=false AXExtrasMenuBar error=-25211
+2026-10-30T21:48:04Z com.lujjjh.LinearMouse: pid=959 terminated=false AXExtrasMenuBar error=-25211
+
+UI selection: No accessible target items — see log
+No hide, invocation, restoration or crash action was performed.
+
+SDK AXError.h identifies -25211 as kAXErrorAPIDisabled.
+Installed versions read from the application bundles:
+MonitorControl 4.4.0 (app.monitorcontrol.MonitorControl)
+LinearMouse 0.12.0 (com.lujjjh.LinearMouse)
