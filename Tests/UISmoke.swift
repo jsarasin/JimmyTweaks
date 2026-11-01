@@ -9,6 +9,7 @@ import AppKit
         let runtime = RuntimeCoordinator(preferences: prefs, permissions: permissions, logger: logger)
         let context = SettingsContext(preferences: prefs, permissions: permissions, runtime: runtime, logger: logger, login: LoginService(preferences: prefs))
         EngineTests.run(logger: logger)
+        ShortcutTests.run(logger: logger)
         let controller = SettingsWindowController(context: context)
         guard let window = controller.window else { fatalError("Settings window missing") }
         window.layoutIfNeeded()
@@ -24,7 +25,49 @@ import AppKit
             assert(window.contentViewController is NSSplitViewController)
             try snapshot(page.rawValue)
         }
-        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "general.openSystemSettings", "general.menuBarIcon", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
+        var demo = ShortcutDefinition(); demo.name = "Selection to Clipboard"
+        demo.combination = ShortcutCombination(input: .key, code: 28, modifiers: (1 << 20) | (1 << 17), keyLabel: "8")
+        demo.actions = [ShortcutActionInstance(actionID: "builtin.delay", parameters:["seconds":"0.25"]), ShortcutActionInstance(actionID:"builtin.screenshot.clipboard")]
+        prefs.shortcuts = [demo]
+        context.navigate?(SearchDestination(page:.shortcuts,controlID:"")); settle()
+        try snapshot("shortcuts-populated")
+        let shortcutPage = window.contentViewController!.children.flatMap(\.children).compactMap { $0 as? CustomShortcutsPageController }.first!
+        shortcutPage.actionsTable.selectRowIndexes(IndexSet(integer:1),byExtendingSelection:false); settle()
+        let up = views(shortcutPage.view).compactMap { $0 as? ActionButton }.first { $0.title == "Up" }!
+        up.handler?(); settle()
+        assert(prefs.shortcuts[0].actions.map(\.actionID) == ["builtin.screenshot.clipboard","builtin.delay"], "Up reorders persisted action instances")
+        views(shortcutPage.view).compactMap { $0 as? ActionButton }.first { $0.title == "Down" }!.handler?(); settle()
+        assert(prefs.shortcuts[0].actions == demo.actions, "Down restores exact action identities and parameters")
+        shortcutPage.actionsTable.selectRowIndexes(IndexSet(integer:0),byExtendingSelection:false); settle()
+        assert(views(shortcutPage.view).compactMap { $0 as? CommitField }.contains { $0.stringValue == "0.25" }, "Selected Delay exposes decimal editing")
+        let picker = ShortcutActionPickerController(registry:runtime.shortcuts.registry) { _ in }
+        let pickerSearch = views(picker.window!.contentView!).compactMap { $0 as? NSSearchField }.first!
+        pickerSearch.stringValue = "delay"; picker.controlTextDidChange(Notification(name:NSControl.textDidChangeNotification,object:pickerSearch))
+        let pickerTable = views(picker.window!.contentView!).compactMap { $0 as? NSTableView }.first!
+        assert(pickerTable.numberOfRows == 2, "Picker search keeps the category and matching action")
+        picker.close()
+        // Repeated opens must retain one responsive picker, never orphan its controller.
+        let openPicker = views(shortcutPage.view).compactMap { $0 as? ActionButton }.first { $0.accessibilityLabel() == "Add Action" }!
+        openPicker.handler?(); settle()
+        let ownedPicker = window.childWindows!.first { $0.title == "Add Action" }!
+        assert(ownedPicker.canBecomeKey && ownedPicker.isVisible, "Picker is visible and accepts keyboard focus")
+        assert(ownedPicker.firstResponder is NSTextView, "Picker focuses its search editor")
+        openPicker.handler?(); settle()
+        assert(window.childWindows!.filter { $0.title == "Add Action" }.count == 1 && window.childWindows!.contains { $0 === ownedPicker }, "Repeated Add Action reuses its owned window")
+        views(ownedPicker.contentView!).compactMap { $0 as? ActionButton }.first { $0.title == "Cancel" }!.performClick(nil); settle()
+        assert(!ownedPicker.isVisible && ownedPicker.parent == nil, "Cancel closes and detaches the picker")
+        openPicker.handler?(); settle()
+        let reopenedPicker = window.childWindows!.first { $0.title == "Add Action" }!
+        assert(reopenedPicker !== ownedPicker, "Closing releases the picker controller so reopening starts cleanly")
+        reopenedPicker.performClose(nil); settle()
+        assert(!reopenedPicker.isVisible && reopenedPicker.parent == nil, "Title-bar close closes and detaches the picker")
+        openPicker.handler?(); settle()
+        let parentBoundPicker = window.childWindows!.first { $0.title == "Add Action" }!
+        window.close(); settle()
+        assert(!parentBoundPicker.isVisible && parentBoundPicker.parent == nil, "Closing Settings closes its action picker")
+        controller.showWindow(nil); settle()
+        prefs.shortcuts = []
+        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "permissions.accessibility.open", "general.menuBarIcon", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
             assert(context.catalog.entries.contains { $0.id == id }, "Missing required searchable control: \(id)")
         }
         print("UI content frame: \(window.contentView!.frame); metadata entries: \(context.catalog.entries.count)")
@@ -32,16 +75,48 @@ import AppKit
         assert(context.catalog.search("move threshold").contains { $0.id == "window.move.threshold" })
         assert(context.catalog.search("script preview").contains { $0.destination.page == .scripts })
         assert(context.catalog.search("menu bar").contains { $0.destination.page == .iconAbsorber })
-        assert(SettingsPage.allCases.map(\.title) == ["General", "Window Resizer", "Icon Absorber", "Reoccurring Scripts", "Logging", "About"])
+        assert(SettingsPage.allCases.map(\.title) == ["General", "Permissions", "Window Resizer", "Icon Absorber", "Custom Shortcuts", "Reoccurring Scripts", "Logging", "About"])
         assert(window.titlebarAccessoryViewControllers.isEmpty, "The redundant top status strip is removed")
         context.navigate?(SearchDestination(page: .general, controlID: "")); settle()
         let generalViews = views(window.contentView!)
         let systemSettingsButtons = generalViews.compactMap { $0 as? NSButton }.filter { $0.title == "Open System Settings" }
-        assert(systemSettingsButtons.count == 1, "One System Settings entry point on General")
-        assert(!context.catalog.entries.contains { $0.id.hasPrefix("assistant.") || $0.id == "navigation.permissions" || $0.id == "navigation.status" })
-        assert(generalViews.contains { $0 is SystemAccessGuide }, "General includes the condensed fictional-account guide")
-        assert(!generalViews.compactMap { $0 as? NSTextField }.contains { ["BACKGROUND AGENT", "Permissions", "Diagnostics", "UI Stub", "UTILITIES", "APPLICATION"].contains($0.stringValue) })
+        assert(systemSettingsButtons.isEmpty, "General keeps preferences; permission controls live in Permissions")
+        assert(!context.catalog.entries.contains { $0.id.hasPrefix("assistant.") || $0.id == "navigation.status" })
+        assert(context.catalog.entries.contains { $0.id == "navigation.permissions" }, "Permissions has a sidebar and search destination")
+        assert(!generalViews.contains { $0 is SystemAccessGuide }, "Permission guidance moved out of General")
+        assert(!generalViews.compactMap { $0 as? NSTextField }.contains { ["BACKGROUND AGENT", "Diagnostics", "UI Stub", "UTILITIES", "APPLICATION"].contains($0.stringValue) })
         assert(generalViews.compactMap { $0 as? NSSearchField }.first!.frame.height >= 30, "Sidebar Search matches the taller system control")
+        // Module links navigate inside Jimmy Tweaks; they never open system dialogs.
+        prefs.shortcuts = [demo]
+        for (source, entry) in [(SettingsPage.window, PermissionEntry.accessibility), (.iconAbsorber, .accessibility), (.iconAbsorber, .screenRecording), (.shortcuts, .accessibility), (.shortcuts, .inputMonitoring), (.shortcuts, .screenRecording)] {
+            context.navigate?(SearchDestination(page:source, controlID:"")); settle()
+            let linkID = "\(source.rawValue).permissions.\(entry.rawValue)"
+            let link = views(window.contentView!).compactMap { $0 as? ActionButton }.first { $0.identifier?.rawValue == linkID }!
+            assert(!link.isHidden && !link.isBordered, "Each required permission is presented as a module hyperlink")
+            link.performClick(nil); settle()
+            let destinationPage = window.contentViewController!.children.flatMap(\.children).compactMap { $0 as? PermissionsPageController }.first!
+            let target = destinationPage.controls[entry.controlID]!
+            assert(destinationPage.scroll.documentVisibleRect.intersects(destinationPage.scroll.documentView!.convert(target.bounds,from:target)), "Link scrolls to the matching permission entry")
+            assert(target.layer?.borderWidth == 2, "Link highlights its permission entry: \(source.rawValue)/\(entry.rawValue), border \(String(describing: target.layer?.borderWidth))")
+            assert(views(destinationPage.view).contains { $0 is SystemAccessGuide }, "Permissions owns the System Settings guide")
+        }
+        assert(context.catalog.search("screen recording").contains { $0.destination.page == .permissions && $0.id == "permissions.screenRecording" }, "Permission entries are searchable")
+        let permissionsPage = window.contentViewController!.children.flatMap(\.children).compactMap { $0 as? PermissionsPageController }.first!
+        let resetButton = permissionsPage.controls["permissions.reset"] as! ActionButton
+        let savedConfirm = context.confirm, savedReset = context.resetPermissionsAndQuit
+        var permissionResetRequests = 0, permissionResetConfirmation: (() -> Void)?
+        context.confirm = { title, _, completion in
+            assert(title == "Reset macOS Permissions and Quit?")
+            permissionResetConfirmation = completion
+        }
+        context.resetPermissionsAndQuit = { permissionResetRequests += 1 }
+        resetButton.performClick(nil)
+        assert(permissionResetConfirmation != nil && permissionResetRequests == 0, "Reset requires confirmation before requesting termination")
+        permissionResetConfirmation?()
+        assert(permissionResetRequests == 1, "Confirmation routes to the app's reset-and-quit lifecycle")
+        context.confirm = savedConfirm; context.resetPermissionsAndQuit = savedReset
+
+        prefs.shortcuts = []
         let mark = MenuBarController.makeIcon()
         assert(mark.isTemplate && mark.size == NSSize(width: 20, height: 20), "Serif J adapts to the menu bar appearance")
         assert(context.catalog.search("not-a-setting-349138").isEmpty)

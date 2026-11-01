@@ -17,6 +17,8 @@ private final class StatusIconButton: NSButton {
 
 /// Native drawing of an upper-right desktop slice. It never captures other apps.
 private final class DesktopSliceView: NSView {
+    let clock = NSTextField(labelWithString: "")
+    private let clockFormatter = DateFormatter()
     private let iconScroll = NSScrollView()
     private let iconDocument = NSView()
     private let cutMask = CAShapeLayer()
@@ -35,9 +37,20 @@ private final class DesktopSliceView: NSView {
         iconScroll.drawsBackground = false; iconScroll.borderType = .noBorder
         iconScroll.hasHorizontalScroller = true; iconScroll.autohidesScrollers = true
         iconScroll.documentView = iconDocument; addSubview(iconScroll)
-        setAccessibilityLabel("Desktop preview containing only selected applications")
+        clock.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        clock.alignment = .right; clock.textColor = .labelColor
+        clock.setAccessibilityLabel("Current local date and time")
+        addSubview(clock); updateClock()
+        setAccessibilityLabel("Desktop preview containing selected applications and the current clock")
     }
     required init?(coder: NSCoder) { fatalError("Programmatic interface") }
+    func updateClock() {
+        clockFormatter.locale = .autoupdatingCurrent; clockFormatter.timeZone = .autoupdatingCurrent
+        clockFormatter.setLocalizedDateFormatFromTemplate("EEE MMM d j:mm")
+        let text = clockFormatter.string(from: Date())
+        guard text != clock.stringValue else { return }
+        clock.stringValue = text; needsLayout = true; needsDisplay = true
+    }
     func update(items: [AbsorbedStatusItem], images: [String: NSImage], enabled: Bool, activate: @escaping (AbsorbedStatusItem, Bool, NSView) -> Void) {
         buttons.forEach { $0.0.removeFromSuperview() }; buttons = []
         for item in items {
@@ -72,7 +85,9 @@ private final class DesktopSliceView: NSView {
     override func layout() {
         super.layout()
         cutMask.frame = bounds; cutMask.path = cutaway()
-        iconScroll.frame = NSRect(x: 25, y: bounds.height - 34, width: max(0, bounds.width - 37), height: 32)
+        let clockWidth = max(70, clock.intrinsicContentSize.width + 4)
+        clock.frame = NSRect(x: max(25, bounds.width - clockWidth - 12), y: bounds.height - 27, width: clockWidth, height: 20)
+        iconScroll.frame = NSRect(x: 25, y: bounds.height - 34, width: max(0, clock.frame.minX - 35), height: 32)
         let width = buttons.reduce(CGFloat(0)) { $0 + $1.1 + 4 }
         let documentWidth = max(iconScroll.contentSize.width, width)
         iconDocument.frame = NSRect(x: 0, y: 0, width: documentWidth, height: 28)
@@ -109,8 +124,10 @@ private final class DesktopSliceView: NSView {
         NSColor.windowBackgroundColor.withAlphaComponent(0.68).setFill(); bar.fill()
         NSColor.separatorColor.withAlphaComponent(0.35).setFill(); NSRect(x: 0, y: bar.minY, width: bounds.width, height: 0.5).fill()
         if buttons.isEmpty {
+            NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: iconScroll.frame).addClip()
             let text = NSAttributedString(string: emptyText, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor])
-            text.draw(at: NSPoint(x: max(28, bounds.width - text.size().width - 18), y: bounds.height - 24))
+            text.draw(at: NSPoint(x: max(28, iconScroll.frame.maxX - text.size().width - 6), y: bounds.height - 24))
+            NSGraphicsContext.restoreGraphicsState()
         }
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -133,11 +150,13 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
     override func build() {
         add(UI.caption("Keep selected menu bar applications within reach. Each icon opens the owning application's original controls."))
         desktop.heightAnchor.constraint(equalToConstant: 180).isActive = true; add(desktop)
-        metadata(desktop, id: "iconAbsorber.preview", label: "Desktop Preview", description: "An upper-right slice of your desktop showing only selected applications. Click or right-click an icon to invoke its original controls.", keywords: ["wallpaper", "virtual status bar", "menu bar", "icons"], section: "Desktop Preview")
+        metadata(desktop, id: "iconAbsorber.preview", label: "Desktop Preview", description: "An upper-right slice of your desktop showing selected applications and the current clock. Click or right-click an icon to invoke its original controls.", keywords: ["wallpaper", "virtual status bar", "menu bar", "icons", "clock"], section: "Desktop Preview")
+        metadata(desktop.clock, id: "iconAbsorber.preview.clock", label: "Preview Clock", description: "Current local date and time, refreshed while the preview is visible.", keywords: ["time", "date", "clock"], section: "Desktop Preview")
         add(wallpaperLabel); add(pictureLabel)
         let settings = card("Icon Absorber")
         toggle("Enable Icon Absorber", key: .iconAbsorberEnabled, id: "iconAbsorber.enabled", description: "Hide status items belonging to your selected applications. Disable this module or choose Restore All to bring them back.", keywords: ["hide", "absorb", "menu", "status", "icons"], section: "Icon Absorber", to: settings)
         add(stateLabel, to: settings); add(detailLabel, to: settings)
+        permissionLink(.accessibility, to: settings)
         let restore = action("Restore All Now", id: "iconAbsorber.restore", description: "Disable Icon Absorber and release every visibility restriction immediately, preserving selections.", keywords: ["emergency", "show", "recover"], to: settings) { [weak self] in self?.module.restoreAll() }
         restore.keyEquivalent = ""; restore.hasDestructiveAction = false
         let apps = card("Applications")
@@ -161,6 +180,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         toggle("Keep icons hidden when opening controls", key: .iconAbsorberHiddenPress, id: "iconAbsorber.hiddenPress", description: "Try AXPress without restoring the physical icon. This is experimental and depends on the application. Leave off to restore briefly and hide again when its original controls close.", keywords: ["AXPress", "hidden", "popover"], section: "Original Controls", to: behavior)
         toggle("Position movable panels near the preview", key: .iconAbsorberPositionPanels, id: "iconAbsorber.positionPanels", description: "Best effort for accessible floating panels only. Native menus and protected or inaccessible surfaces appear in their normal position.", keywords: ["position", "move", "panel", "popover"], section: "Original Controls", to: behavior)
         action("Refresh Icon Pictures", id: "iconAbsorber.pictures", description: "Capture the original status icons from the menu-bar window. Requires optional Screen Recording permission; no other app windows are captured.", section: "Desktop Preview", to: behavior, enabled: { [weak self] in self?.module.capturing == false }) { [weak self] in self?.module.refreshPictures() }
+        permissionLink(.screenRecording, title: "Screen Recording for original icon pictures…", to: behavior)
         let compatibility = card("Compatibility")
         add(UI.caption("This module uses an unsupported macOS visibility API in an isolated service. It restores all items if that service fails or if Apple controls are present that the API cannot preserve. Original application menus are never recreated."), to: compatibility)
         add(UI.caption("Left-click uses Accessibility without synthesizing a global mouse click. Right-click uses an exposed menu action or an application-targeted event where supported. Some apps require their physical icon to be visible."), to: compatibility)
@@ -178,7 +198,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
             timer.tolerance = 1; RunLoop.main.add(timer, forMode: .common); wallpaperTimer = timer
         }
     }
-    private func updateWallpaper() { desktop.loadWallpaper(); wallpaperLabel.stringValue = desktop.wallpaperDescription }
+    private func updateWallpaper() { desktop.updateClock(); desktop.loadWallpaper(); wallpaperLabel.stringValue = desktop.wallpaperDescription }
     override func refreshValues() {
         super.refreshValues()
         let focused = table.selectedRow >= 0 && rows.indices.contains(table.selectedRow) ? rows[table.selectedRow].bundle : nil

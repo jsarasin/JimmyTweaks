@@ -18,7 +18,7 @@ The new Settings sidebar page includes a shallow desktop slice with straight top
 and right boundaries and restrained irregular left and bottom continuation edges.
 It loads the active screen's wallpaper using `NSWorkspace.desktopImageURL(for:)`,
 draws a crop of its upper-right region, and shows only the selected applications'
-status items. It follows the screen containing Settings. Space/display changes,
+status items alongside a right-aligned live clock. The clock shows the local date and time, respects the locale's hour format, and refreshes with the existing visible-page timer. Icons and empty-state text reserve space for the clock. It follows the screen containing Settings. Space/display changes,
 appearance changes, and a five-second visible-page refresh update the wallpaper.
 Dynamic/video wallpapers may provide only a still image or no readable asset.
 Unavailable wallpaper is explicitly labeled and uses a neutral background.

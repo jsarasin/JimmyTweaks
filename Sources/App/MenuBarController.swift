@@ -1,5 +1,4 @@
 import AppKit
-import CoreText
 
 /// An optional, first-party status item. It never changes foreign status items.
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -16,23 +15,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         update()
     }
     static func makeIcon() -> NSImage {
-        let font = CTFontCreateWithName("Baskerville-BoldItalic" as CFString, 22, nil)
-        var character: UniChar = 74, glyph = CGGlyph()
-        CTFontGetGlyphsForCharacters(font, &character, &glyph, 1)
-        let path = CTFontCreatePathForGlyph(font, glyph, nil)
-        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
-            guard let path, let context = NSGraphicsContext.current?.cgContext else { return false }
-            let box = path.boundingBoxOfPath
-            guard box.width > 0, box.height > 0 else { return false }
-            let scale = min(15 / box.width, 18 / box.height)
-            context.saveGState()
-            context.translateBy(x: (rect.width - box.width * scale) / 2, y: (rect.height - box.height * scale) / 2)
-            context.scaleBy(x: scale, y: scale); context.translateBy(x: -box.minX, y: -box.minY)
-            context.addPath(path); context.setFillColor(NSColor.black.cgColor); context.fillPath(); context.restoreGState()
-            return true
-        }
-        image.isTemplate = true; image.accessibilityDescription = "Jimmy Tweaks — serif J"
-        return image
+        BrandIcon.menuBarImage()
     }
     private func update() {
         guard preferences.bool(.showMenuBarIcon) else {

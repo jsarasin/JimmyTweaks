@@ -1,8 +1,8 @@
 # Jimmy Tweaks
 
-A native macOS 27+ Swift/AppKit background utility for corner resizing, interior window moving, and selected menu bar applications. Icon Absorber is experimental on macOS 27. Reoccurring Scripts contains sample URLs and fictional history only; it does not execute scripts.
+A native macOS 27+ Swift/AppKit background utility for corner resizing, interior window moving, custom global shortcuts, and selected menu bar applications. Icon Absorber is experimental on macOS 27. Reoccurring Scripts contains sample URLs and fictional history only; it does not execute scripts.
 
-The original product contract is in [SPEC.md](SPEC.md); the new module is documented in [Icon Absorber](Docs/IconAbsorber.md). The app has one Settings window, local UserDefaults, seven-day plain-text logs, and a small isolated assertion service used only by Icon Absorber.
+The original product contract is in [SPEC.md](SPEC.md); the modules are documented in [Icon Absorber](Docs/IconAbsorber.md) and [Custom Shortcuts](Docs/CustomShortcuts.md). The app has one Settings window, local UserDefaults, seven-day plain-text logs, and a small isolated assertion service used only by Icon Absorber.
 
 ## Build and open
 
@@ -13,14 +13,15 @@ Requires macOS 27, an Apple silicon Mac, and Xcode with the macOS 27 SDK. There 
 open "build/Development/Jimmy Tweaks.app"
 ```
 
-The build script creates a locally ad-hoc signed application with Hardened Runtime. This local build has **not** been Developer ID signed or notarized. You can also open `JimmyTweaks.xcodeproj` and use the shared JimmyTweaks scheme. The generated icon is included in Resources; `Scripts/make-icon.swift` is its source.
+The build script creates a locally ad-hoc signed application with Hardened Runtime. This local build has **not** been Developer ID signed or notarized. You can also open `JimmyTweaks.xcodeproj` and use the shared JimmyTweaks scheme. The generated icon is included in Resources; `Sources/App/BrandIcon.swift` defines the shared gothic J outline for the application and menu bar, and `Scripts/make-icon.swift` packages it at all macOS icon sizes.
 
 `./Scripts/build.sh Release` enables the compile-time Release-only login preference. That preference stays unavailable until the app is Developer ID signed and installed in Applications. Other builds contain no login registration-changing implementation.
 
 ## Use
 
-- Open the app to show General. Its single **Open System Settings** button and compact illustration explain where to allow Jimmy Tweaks to control other applications. Access is checked automatically.
-- General also controls the optional serif **J** menu bar icon and Suspend All. The guide uses a fictional account and generated portrait; it never reads your account name or family photos.
+- Open the app to show General. **Permissions** collects Accessibility, Input Monitoring, and Screen Recording guidance, live status, and the corresponding System Settings controls. Each module has hyperlinks that open and highlight the permission entry it uses.
+- For a clean permission test, use **Permissions → Reset macOS Permissions and Quit…**. After confirmation, the app stops input handling, cancels owned actions, runs `/usr/bin/tccutil reset All <this build’s bundle identifier>`, and quits. Reopen it to grant access again. The reset targets only this app’s privacy decisions; shortcut definitions, application preferences, Login Items, and other System Settings stay intact. macOS may retain some visible entries. See [Apple’s permission-reset guidance](https://developer.apple.com/documentation/xcode/resetting-access-to-protected-resources-in-macos).
+- General controls the optional gothic **J** menu bar icon and Suspend All. The matching control-panel examples for all three permissions use a fictional account and generated portrait; they never read your account name or family photos.
 - Hold Command and right-drag within a corner area to resize. Corner areas default to 200 logical points (adjustable from 8 to 400). All four corners preserve the opposite corner where the target app accepts geometry changes. Immediate activation is the default.
 - Animated effects use abstract iridescent corner energy while hovering/resizing, with a palette independent of the macOS accent colour, and blue mist while moving. Both respond to accepted window velocity and acceleration. Corner energy uses 96-point arms and reconstructs emission between widely spaced resize samples, keeping fast drags continuous. Mist is visible from its first frame, builds quickly, and fades to transparent at the window edges. Stationary, click-through overlays are reused per display, with full-display Metal views and native-resolution drawables. Fire persists in a stationary desktop heat field, so rapid direction changes do not crop its trail at a moving rectangular boundary. Emitter movement is swept analytically in one compute pass per frame. Mist retains its intentional fade at the target window edges.
 - Turn off **Animated effects** for steady corner marks and a simple moving outline. macOS **Reduce Motion** disables the checkbox, explains why, and uses static feedback without changing the saved preference. Hidden/static effects have no animation timer. If Metal is unavailable, static feedback is used automatically.
@@ -31,6 +32,10 @@ The build script creates a locally ad-hoc signed application with Hardened Runti
 - Close Settings to leave the agent running. Reopen the app from Applications to change settings. Suspend All persists between launches; Quit Jimmy Tweaks stops the process.
 
 The window gesture capture path uses Accessibility-authorized modifying event interception and click replay. Input Monitoring is not requested merely because an event tap exists. Optional Icon Absorber icon pictures capture only the native menu-bar window after Screen Recording access is granted. Wallpaper is loaded through NSWorkspace. The app does not record typed keys or fetch sample script URLs.
+
+## Custom Shortcuts
+
+Enable **Custom Shortcuts** and add global keyboard/mouse combinations with ordered actions. Transparent observes input passively; Absorbing shares Window Resizer's active input tap. Press and Release activation are supported. Add native screen selection to clipboard or a cancellable 0.001–60 second Delay, and reorder actions with drag/drop or Up/Down. Different shortcuts run concurrently; Escape cancels them all. Suspend All and module disable also cancel execution. The recorder and Jimmy Tweaks' own windows are excluded. Input Monitoring is requested explicitly when passive observation needs authorization. See [Custom Shortcuts](Docs/CustomShortcuts.md) for permissions, limitations, extension hooks, and the remaining interactive checks.
 
 ## Icon Absorber
 
@@ -51,7 +56,8 @@ Window eligibility depends on public Accessibility attributes. Some apps constra
 | `Sources/IconAbsorber` | Independent discovery, visibility-service client, original-control invocation and optional icon capture |
 | `Helpers/IconAbsorberAgent` | Private assessment API adapter in a disposable process; no watchdog or login registration |
 | `Sources/App` | Lifecycle, permission polling, bounded engine recovery, compile-time login preference |
-| `Sources/Settings` | Six native pages, taller sidebar search, one General/System Settings entry point and a fictional-account guide |
+| `Sources/Shortcuts` | Coordinated input routing, floating recorder, action registry, independent cancellable sequences |
+| `Sources/Settings` | Eight native pages, taller sidebar search, centralized permission entries and module hyperlinks |
 | `Tests` | Deterministic outcome tests, native UI smoke harness, isolated AX fixture, boundary checks |
 | `Scripts` | Local build, focused final checks, icon generation, signed distribution workflow |
 

@@ -9,6 +9,7 @@ final class RuntimeCoordinator: NSObject {
     let preferences: PreferenceStore
     let permissions: PermissionCoordinator
     let logger: FileLogger
+    let shortcuts: ShortcutController
     private let windows = AccessibilityWindows()
     private let feedback = FeedbackController()
     private var engine: WindowGestureController?
@@ -32,8 +33,11 @@ final class RuntimeCoordinator: NSObject {
 
     init(preferences: PreferenceStore, permissions: PermissionCoordinator, logger: FileLogger) {
         self.preferences = preferences; self.permissions = permissions; self.logger = logger
+        self.shortcuts = ShortcutController(preferences: preferences, permissions: permissions, logger: logger)
         self.wasEnabled = preferences.bool(.enabled)
         super.init()
+        shortcuts.onRetry = { [weak self] in self?.retry() }
+        shortcuts.onNeedsReconcile = { [weak self] in self?.reconcile() }
         observers.append(NotificationCenter.default.addObserver(forName: .preferencesChanged, object: preferences, queue: .main) { [weak self] _ in
             guard let self = self else { return }
             let enabled = self.preferences.bool(.enabled)
@@ -76,15 +80,17 @@ final class RuntimeCoordinator: NSObject {
     }
     func reconcile() {
         guard !shuttingDown else { return }
+        shortcuts.reconcile(sessionActive: sessionActive)
         let p = preferences.gesture
+        let needsInput = p.anyGesture || shortcuts.needsActiveTap
         let blocker: (RuntimeState, String)?
         if preferences.bool(.suspended) { blocker = (.suspended, "Enabled features are paused. Your individual settings are preserved.") }
-        else if !p.anyGesture { blocker = (.disabled, !p.enabled ? "Window Resizer is switched off." : "Both gestures are switched off.") }
+        else if !needsInput { blocker = (.disabled, !p.enabled ? "Window Resizer is switched off." : "Both gestures are switched off.") }
         else if !sessionActive { blocker = (.paused, "Features resume after this user session becomes active.") }
         else if !permissions.ready { blocker = (.permission, permissions.summary) }
         else if failed { blocker = (.failed, failureDetail) }
         else { blocker = nil }
-        permissions.setBackgroundEligible(p.anyGesture && !preferences.bool(.suspended) && sessionActive)
+        permissions.setBackgroundEligible((p.anyGesture || preferences.bool(.shortcutsEnabled)) && !preferences.bool(.suspended) && sessionActive)
         if let blocker = blocker {
             cancelRetry(); stopEngine(discard: !sessionActive); setState(blocker.0, blocker.1); return
         }
@@ -103,10 +109,11 @@ final class RuntimeCoordinator: NSObject {
     }
     private func startEngine(_ p: GesturePreferences) {
         let engine = WindowGestureController(preferences: p, windows: windows, logger: logger, ownership: recovery)
+        engine.shortcutRouter = shortcuts
         self.engine = engine; engineReady = false; engineStopping = false
         engine.onReady = { [weak self, weak engine] in
             guard let self = self, let engine = engine, self.engine === engine else { return }
-            self.engineReady = true; self.recovery = RecoveryOwnership(); self.setState(.running, self.gestureSummary)
+            self.engineReady = true; self.shortcuts.activeTapReady(true); self.recovery = RecoveryOwnership(); self.setState(.running, self.gestureSummary)
             let stable = DispatchWorkItem { [weak self, weak engine] in
                 guard let self = self, let engine = engine, self.engine === engine, self.engineReady else { return }
                 self.budget.reset()
@@ -125,16 +132,18 @@ final class RuntimeCoordinator: NSObject {
         engine.onPermissionConcern = { [weak self] in self?.permissions.refresh() }
         engine.onStopped = { [weak self, weak engine] in
             guard let self = self, let engine = engine, self.engine === engine else { return }
+            self.shortcuts.activeTapReady(false)
             self.engine = nil; self.engineReady = false; self.engineStopping = false; self.feedback.clear()
             if self.shuttingDown { self.completeShutdown() } else { self.reconcile() }
         }
         engine.onFailure = { [weak self, weak engine] message, ownership in
             guard let self = self, let engine = engine, self.engine === engine else { return }
+            self.shortcuts.activeTapReady(false)
             self.engine = nil; self.engineReady = false; self.engineStopping = false; self.stableWork?.cancel(); self.feedback.clear()
             self.recovery = ownership
             if self.shuttingDown { self.completeShutdown(); return }
             self.permissions.refresh(notify: false)
-            guard self.permissions.ready, self.sessionActive, self.preferences.gesture.anyGesture, !self.preferences.bool(.suspended) else { self.reconcile(); return }
+            guard self.permissions.ready, self.sessionActive, (self.preferences.gesture.anyGesture || self.shortcuts.needsActiveTap), !self.preferences.bool(.suspended) else { self.reconcile(); return }
             self.lastFailure = Date(); self.logger.log("runtime", "engine.failure", message, severity: "WARN")
             guard let delay = self.budget.nextDelay(now: ProcessInfo.processInfo.systemUptime) else {
                 self.failed = true; self.failureDetail = message + " Automatic retries are exhausted. Choose Retry or review the log."
@@ -171,6 +180,7 @@ final class RuntimeCoordinator: NSObject {
     }
     func shutdown(completion: @escaping () -> Void) {
         shuttingDown = true; shutdownCompletion = completion; cancelRetry(); stableWork?.cancel(); feedback.clear()
+        shortcuts.shutdown()
         if let engine = engine { engineStopping = true; engine.stop(discardPending: !sessionActive, forceAfter: 0.5) }
         else { completeShutdown() }
     }

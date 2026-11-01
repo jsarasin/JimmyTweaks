@@ -7,8 +7,9 @@ private func jimmyEventCallback(proxy: CGEventTapProxy, type: CGEventType, event
     return Unmanaged<WindowGestureController>.fromOpaque(userInfo).takeUnretainedValue().receive(proxy: proxy, type: type, event: event)
 }
 
-/// One session event tap. All mutable gesture state below belongs to its dedicated run loop.
+/// Shared active session tap. State is serialized on the main run loop; AX work remains asynchronous.
 final class WindowGestureController: @unchecked Sendable {
+    weak var shortcutRouter: ShortcutController?
     var onReady: (() -> Void)?
     var onStopped: (() -> Void)?
     var onFailure: ((String, RecoveryOwnership) -> Void)?
@@ -24,7 +25,6 @@ final class WindowGestureController: @unchecked Sendable {
     private let currentButton = Locked<MouseButton?>(nil)
     private let gate = GenerationGate()
     private let initialOwnership: RecoveryOwnership
-    private var thread: Thread?
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var heartbeat: CFRunLoopTimer?
@@ -60,9 +60,7 @@ final class WindowGestureController: @unchecked Sendable {
         self.preferences = Locked(preferences); self.windows = windows; self.logger = logger; self.initialOwnership = ownership
     }
     func start() {
-        let thread = Thread { [self] in run() }
-        thread.name = "Jimmy Tweaks Input"; thread.qualityOfService = .userInteractive
-        self.thread = thread; thread.start()
+        DispatchQueue.main.async { [self] in run() }
     }
     func update(_ new: GesturePreferences) {
         let old = preferences.snapshot
@@ -98,14 +96,14 @@ final class WindowGestureController: @unchecked Sendable {
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue, body); CFRunLoopWakeUp(runLoop)
     }
     private func run() {
-        let runLoop = CFRunLoopGetCurrent()!
+        let runLoop = CFRunLoopGetMain()!
         loop.withValue { $0 = runLoop }
         let ownedButton = initialOwnership.button.flatMap { button in
             CGEventSource.buttonState(.combinedSessionState, button: button == .left ? .left : .right) ? button : nil
         }
         machine.adoptDrain(ownedButton, escape: initialOwnership.escape && CGEventSource.keyState(.combinedSessionState, key: 53))
         let types: [CGEventType] = [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown, .rightMouseDragged,
-                                   .rightMouseUp, .mouseMoved, .flagsChanged, .keyDown, .keyUp, .otherMouseDown, .scrollWheel]
+                                   .rightMouseUp, .mouseMoved, .flagsChanged, .keyDown, .keyUp, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .scrollWheel]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                 eventsOfInterest: mask, callback: jimmyEventCallback, userInfo: Unmanaged.passUnretained(self).toOpaque())
@@ -118,6 +116,10 @@ final class WindowGestureController: @unchecked Sendable {
         CFRunLoopAddSource(runLoop, source, .commonModes)
         heartbeat = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 0.05, 0.05, 0, 0) { [weak self] _ in
             guard let self = self else { return }
+            if self.stopping.snapshot {
+                self.shortcutRouter?.discardReleasedOwnership()
+                self.maybeStop()
+            }
             if self.machine.phase == .draining || self.machine.escapeOwned {
                 let released: Bool
                 if let b = self.machine.session?.button { released = !CGEventSource.buttonState(.combinedSessionState, button: b == .left ? .left : .right) }
@@ -129,20 +131,7 @@ final class WindowGestureController: @unchecked Sendable {
         CFRunLoopAddTimer(runLoop, heartbeat, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         if stopping.snapshot { tearDown() }
-        else {
-            DispatchQueue.main.async { [self] in onReady?() }
-            CFRunLoopRun()
-        }
-        gate.close()
-        if let heartbeat = heartbeat { CFRunLoopTimerInvalidate(heartbeat) }
-        if let source = source { CFRunLoopRemoveSource(runLoop, source, .commonModes) }
-        CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap)
-        self.tap = nil; self.source = nil; self.heartbeat = nil
-        heldDown = nil; heldDrag = nil; replayOnNextEvent = false; target = nil; loop.withValue { $0 = nil }
-        publishFeedback(nil)
-        DispatchQueue.main.async { [self] in
-            if let failure = exitFailure { onFailure?(failure, exitOwnership) } else { onStopped?() }
-        }
+        else { DispatchQueue.main.async { [self] in onReady?() } }
     }
 
     fileprivate func receive(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -153,6 +142,7 @@ final class WindowGestureController: @unchecked Sendable {
             exitFailure = type == .tapDisabledByTimeout ? "The system disabled the input tap after a timeout." : "The system disabled the input tap."
             gate.close(); publishFeedback(nil); tearDown(); return Unmanaged.passUnretained(event)
         }
+        if shortcutRouter?.intercept(type: type, event: event) == true { maybeStop(); return nil }
         // A validation reply/deadline runs outside an event callback. Keep its two-event
         // buffer until a real callback supplies a proxy, so an already-queued physical
         // up cannot overtake a globally posted synthetic down.
@@ -194,7 +184,7 @@ final class WindowGestureController: @unchecked Sendable {
         }
         if !modifiers.command { idleFeedback = nil; idleAfterMouseUp = false }
         let decision = machine.handle(input, preferences: preferences.snapshot,
-                                      accepting: admission.snapshot && !finishing && !workerBusy)
+                                      accepting: admission.snapshot && !finishing && !workerBusy && shortcutRouter?.blocksGestures != true)
         execute(decision, event: event, proxy: proxy)
         return decision
     }
@@ -407,8 +397,20 @@ final class WindowGestureController: @unchecked Sendable {
         let published = next
         DispatchQueue.main.async { [weak self] in self?.onFeedback?(published) }
     }
-    private func maybeStop() { if stopping.snapshot && !machine.ownsSequence && !replayOnNextEvent { tearDown() } }
-    private func tearDown() { gate.close(); if let runLoop = loop.snapshot { CFRunLoopStop(runLoop) } }
+    private func maybeStop() { if stopping.snapshot && !machine.ownsSequence && !replayOnNextEvent && shortcutRouter?.hasAbsorbedPress != true { tearDown() } }
+    private func tearDown() {
+        gate.close()
+        guard let tap = tap else { return }
+        if let heartbeat = heartbeat { CFRunLoopTimerInvalidate(heartbeat) }
+        if let source = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap)
+        self.tap = nil; source = nil; heartbeat = nil
+        heldDown = nil; heldDrag = nil; replayOnNextEvent = false; target = nil; loop.withValue { $0 = nil }
+        publishFeedback(nil)
+        DispatchQueue.main.async { [self] in
+            if let failure = exitFailure { onFailure?(failure, exitOwnership) } else { onStopped?() }
+        }
+    }
 }
 
 #if TESTING

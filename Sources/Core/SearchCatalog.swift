@@ -1,9 +1,11 @@
 import Foundation
 
 enum SettingsPage: String, CaseIterable {
-    case general, window, iconAbsorber, scripts, logging, about
+    case general, permissions, window, iconAbsorber, shortcuts, scripts, logging, about
     var title: String {
         switch self {
+        case .permissions: return "Permissions"
+        case .shortcuts: return "Custom Shortcuts"
         case .window: return "Window Resizer"
         case .iconAbsorber: return "Icon Absorber"
         case .scripts: return "Reoccurring Scripts"
@@ -14,6 +16,8 @@ enum SettingsPage: String, CaseIterable {
     }
     var symbol: String {
         switch self {
+        case .permissions: return "lock.shield"
+        case .shortcuts: return "keyboard"
         case .window: return "arrow.up.left.and.arrow.down.right"
         case .iconAbsorber: return "menubar.rectangle"
         case .scripts: return "terminal"
@@ -23,6 +27,18 @@ enum SettingsPage: String, CaseIterable {
         }
     }
     var order: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+}
+enum PermissionEntry: String, CaseIterable {
+    case accessibility, inputMonitoring, screenRecording
+    var title: String {
+        switch self {
+        case .accessibility: return "Accessibility"
+        case .inputMonitoring: return "Input Monitoring"
+        case .screenRecording: return "Screen Recording"
+        }
+    }
+    var controlID: String { "permissions.\(rawValue)" }
+    var destination: SearchDestination { SearchDestination(page: .permissions, controlID: controlID) }
 }
 struct SearchDestination {
     var page: SettingsPage

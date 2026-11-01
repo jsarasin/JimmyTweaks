@@ -88,6 +88,18 @@ enum UI {
         return label
     }
     static func caption(_ text: String) -> NSTextField { let label = label(text, size: 12); label.textColor = .secondaryLabelColor; return label }
+    static func updateSystemAccessStatus(_ label: NSTextField, permissions: PermissionCoordinator) {
+        if !permissions.accessibility {
+            label.stringValue = "Access is needed. Enable Jimmy Tweaks, then return here."
+            label.textColor = .systemOrange
+        } else if !permissions.eventPosting {
+            label.stringValue = "Access is granted. Waiting for macOS to make input control available."
+            label.textColor = .secondaryLabelColor
+        } else {
+            label.stringValue = "Permissions granted"
+            label.textColor = .systemGreen
+        }
+    }
     static func horizontal(_ views: [NSView], spacing: CGFloat = 10) -> NSStackView {
         let stack = NSStackView(views: views); stack.orientation = .horizontal; stack.alignment = .centerY; stack.spacing = spacing; return stack
     }
@@ -136,6 +148,7 @@ final class SettingsContext {
     var confirm: ((String, String, @escaping () -> Void) -> Void)?
     var showMessage: ((String, String) -> Void)?
     var refresh: (() -> Void)?
+    var resetPermissionsAndQuit: (() -> Void)?
     init(preferences: PreferenceStore, permissions: PermissionCoordinator, runtime: RuntimeCoordinator, logger: FileLogger, login: LoginService) {
         self.preferences = preferences; self.permissions = permissions; self.runtime = runtime; self.logger = logger; self.login = login
         iconAbsorber = IconAbsorberController(preferences: preferences, permissions: permissions, logger: logger)
@@ -167,6 +180,8 @@ class SettingsPageController: NSViewController {
     let scroll = NSScrollView()
     var controls: [String: NSView] = [:]
     var refreshers: [() -> Void] = []
+    private var focusHighlight: DispatchWorkItem?
+    private weak var highlightedControl: NSView?
     init(_ page: SettingsPage, context: SettingsContext) { self.page = page; self.context = context; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("Programmatic interface") }
     override func loadView() {
@@ -216,6 +231,18 @@ class SettingsPageController: NSViewController {
         refreshers.append { [weak button] in button?.isEnabled = enabled() }
         return button
     }
+    @discardableResult func permissionLink(_ permission: PermissionEntry, title: String? = nil, to parent: NSStackView) -> ActionButton {
+        let title = title ?? "\(permission.title) permissions…"
+        let button = ActionButton(title) { [weak self] in self?.context.navigate?(permission.destination) }
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 12)
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue]
+        button.attributedTitle = NSAttributedString(string: title, attributes: attributes)
+        button.setAccessibilityRole(.link)
+        add(button, to: parent)
+        metadata(button, id: "\(page.rawValue).permissions.\(permission.rawValue)", label: title, description: "Review \(permission.title) in Permissions.", keywords: ["permission", "access", permission.title], section: "Permissions")
+        return button
+    }
     @discardableResult func toggle(_ title: String, key: PreferenceKey, id: String, description: String, keywords: [String], section: String, to parent: NSStackView, enabled: @escaping () -> Bool = { true }, unavailable: String = "Enable Window Resizer first.") -> ActionButton {
         let prefs = context.preferences
         let button = ActionButton(title) {}; button.setButtonType(.switch); button.bezelStyle = .regularSquare
@@ -239,10 +266,14 @@ class SettingsPageController: NSViewController {
     }
     func focus(_ id: String) {
         guard let control = controls[id] else { return }
+        focusHighlight?.cancel(); highlightedControl?.layer?.borderWidth = 0
+        highlightedControl = control
         control.scrollToVisible(control.bounds.insetBy(dx: -8, dy: -12))
         if let native = control as? NSControl, native.isEnabled { view.window?.makeFirstResponder(native) }
         control.wantsLayer = true
         control.layer?.borderColor = NSColor.controlAccentColor.cgColor; control.layer?.borderWidth = 2; control.layer?.cornerRadius = 5
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak control] in control?.layer?.borderWidth = 0 }
+        let highlight = DispatchWorkItem { [weak control] in control?.layer?.borderWidth = 0 }
+        focusHighlight = highlight
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: highlight)
     }
 }

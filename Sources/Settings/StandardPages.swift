@@ -2,30 +2,8 @@ import AppKit
 
 final class GeneralPageController: SettingsPageController {
     override func build() {
-        let access = card("")
-        let guide = SystemAccessGuide()
-        guide.heightAnchor.constraint(equalToConstant: 205).isActive = true
-        add(guide, to: access)
-        metadata(guide, id: "general.systemAccessGuide", label: "System Settings Guide", description: "A condensed example showing where to enable Jimmy Tweaks. The account and portrait are fictional.", keywords: ["permission", "accessibility", "device control", "data access"], section: "System Access")
-        add(UI.label("Enable Jimmy Tweaks in Device Control and Data Access to discover menu bar applications and control windows."), to: access)
-        let status = UI.caption(""); add(status, to: access)
-        metadata(status, id: "general.accessStatus", label: "System Access", description: "The application's current permission state, checked automatically.", keywords: ["permission", "accessibility", "access", "granted"], section: "System Access")
-        action("Open System Settings", id: "general.openSystemSettings", description: "Open the system privacy settings to allow Jimmy Tweaks to control other applications.", keywords: ["allow", "grant", "permission", "accessibility"], to: access) { [weak self] in self?.context.permissions.openSettings() }
-        refreshers.append { [weak self, weak status] in
-            guard let self else { return }
-            if !self.context.permissions.accessibility {
-                status?.stringValue = "Access is needed. Enable Jimmy Tweaks, then return here."
-                status?.textColor = .systemOrange
-            } else if !self.context.permissions.eventPosting {
-                status?.stringValue = "Access is granted. Waiting for macOS to make input control available."
-                status?.textColor = .secondaryLabelColor
-            } else {
-                status?.stringValue = "Permissions granted"
-                status?.textColor = .systemGreen
-            }
-        }
         let options = card("Preferences")
-        toggle("Show menu bar icon", key: .showMenuBarIcon, id: "general.menuBarIcon", description: "Show the serif J in the menu bar for quick access to Jimmy Tweaks.", keywords: ["menu", "icon", "status", "J"], section: "Preferences", to: options)
+        toggle("Show menu bar icon", key: .showMenuBarIcon, id: "general.menuBarIcon", description: "Show the gothic J in the menu bar for quick access to Jimmy Tweaks.", keywords: ["menu", "icon", "status", "J"], section: "Preferences", to: options)
         toggle("Suspend All", key: .suspended, id: "global.suspendAll", description: "Pause all enabled features and restore absorbed icons. Your individual settings are preserved.", keywords: ["pause", "resume", "stop", "master"], section: "Preferences", to: options)
         add(UI.caption("Closing Settings keeps enabled features running. Reopen it from the menu bar icon or Applications."), to: options)
         if context.login.available {
@@ -52,6 +30,65 @@ final class GeneralPageController: SettingsPageController {
     }
 }
 
+final class PermissionsPageController: SettingsPageController {
+    private func addGuide(for permission: PermissionEntry, to card: NSStackView) {
+        let guide = SystemAccessGuide(permission: permission)
+        guide.heightAnchor.constraint(equalToConstant: guide.intrinsicContentSize.height).isActive = true
+        add(guide, to: card)
+    }
+    override func build() {
+        add(UI.caption("Manage the macOS permissions used by Jimmy Tweaks. Each module links to the access it needs."))
+        let reset = card("Reset for Testing")
+        add(UI.caption("Clear Jimmy Tweaks’ macOS privacy permissions, then quit for a clean next launch. Your shortcut definitions and app preferences are preserved."), to: reset)
+        let resetButton = action("Reset macOS Permissions and Quit…", id: "permissions.reset", description: "Reset only this build’s macOS privacy permissions and quit. Reopen Jimmy Tweaks to grant access again.", keywords: ["remove", "clear", "reset", "testing", "tcc", "privacy"], to: reset) { [weak self] in
+            self?.context.confirm?("Reset macOS Permissions and Quit?", "This clears privacy permission decisions for Jimmy Tweaks and then quits the app. Reopen it to grant access again. macOS may keep some entries listed; Login Items and other System Settings are not reset. Your shortcut definitions and app preferences are preserved.") { [weak self] in
+                self?.context.resetPermissionsAndQuit?()
+            }
+        }
+        resetButton.hasDestructiveAction = true
+        let access = card(PermissionEntry.accessibility.title)
+        metadata(access, id: PermissionEntry.accessibility.controlID, label: "Accessibility — Device Control and Data Access", description: "Required for Window Resizer, Icon Absorber, and Absorbing shortcuts.", keywords: ["permission", "device control", "data access", "window", "menu bar", "absorbing"], section: "Accessibility")
+        addGuide(for: .accessibility, to: access)
+        add(UI.label("Enable Jimmy Tweaks in Device Control and Data Access to control windows, discover menu bar applications, and intercept Absorbing shortcuts."), to: access)
+        let status = UI.caption(""); add(status, to: access)
+        action("Open System Settings", id: "permissions.accessibility.open", description: "Open macOS privacy settings for Accessibility / Device Control and Data Access.", keywords: ["allow", "grant", "system settings"], section: "Accessibility", to: access) { [weak self] in self?.context.permissions.openSettings() }
+        refreshers.append { [weak self, weak status] in
+            guard let self, let status else { return }
+            UI.updateSystemAccessStatus(status, permissions: self.context.permissions)
+        }
+
+        let input = card(PermissionEntry.inputMonitoring.title)
+        metadata(input, id: PermissionEntry.inputMonitoring.controlID, label: "Input Monitoring", description: "Observe Transparent shortcuts and record global keyboard and mouse combinations.", keywords: ["permission", "keyboard", "mouse", "listen", "transparent", "recorder"], section: "Input Monitoring")
+        addGuide(for: .inputMonitoring, to: input)
+        add(UI.caption("Used by Transparent shortcuts and the global shortcut recorder. Accessibility may also permit observation; the module checks whether input observation can actually start."), to: input)
+        let inputStatus = UI.caption(""); add(inputStatus, to: input)
+        let request = action("Allow Input Monitoring", id: "permissions.inputMonitoring.allow", description: "Ask macOS for Input Monitoring access. A denied request is not repeated automatically.", keywords: ["grant", "listen", "request"], section: "Input Monitoring", to: input) { [weak self] in self?.context.permissions.requestShortcutObservation() }
+        action("Open Input Monitoring Settings…", id: "permissions.inputMonitoring.open", description: "Open macOS Input Monitoring privacy settings.", keywords: ["system settings", "allow", "listen"], section: "Input Monitoring", to: input) { [weak self] in self?.context.permissions.openInputMonitoringSettings() }
+        refreshers.append { [weak self, weak inputStatus, weak request] in
+            guard let self else { return }
+            let granted = self.context.permissions.inputMonitoring
+            inputStatus?.stringValue = granted ? "Permission granted" : "Input Monitoring has not been granted."
+            inputStatus?.textColor = granted ? .systemGreen : .systemOrange
+            request?.isEnabled = !granted
+        }
+
+        let screen = card(PermissionEntry.screenRecording.title)
+        metadata(screen, id: PermissionEntry.screenRecording.controlID, label: "Screen Recording", description: "Optional access for capturing original menu bar icon pictures. Review capture access for native screenshot actions here.", keywords: ["permission", "screen capture", "clipboard", "screenshot", "icon pictures"], section: "Screen Recording")
+        addGuide(for: .screenRecording, to: screen)
+        add(UI.caption("Optional for Icon Absorber’s original icon pictures. Native screenshot actions use the macOS screenshot utility; macOS handles authorization for that operation."), to: screen)
+        let screenStatus = UI.caption(""); add(screenStatus, to: screen)
+        action("Open Screen Recording Settings…", id: "permissions.screenRecording.open", description: "Open macOS Screen Recording privacy settings. No screen is captured by opening this entry.", keywords: ["system settings", "capture", "allow"], section: "Screen Recording", to: screen) { [weak self] in self?.context.permissions.openScreenRecordingSettings() }
+        refreshers.append { [weak self, weak screenStatus] in
+            guard let self else { return }
+            let granted = self.context.permissions.screenRecording
+            screenStatus?.stringValue = granted ? "Permission granted" : "Screen Recording has not been granted. Optional features can use application icons instead."
+            screenStatus?.textColor = granted ? .systemGreen : .secondaryLabelColor
+        }
+        let refresh = card("")
+        action("Check Permissions Again", id: "permissions.refresh", description: "Refresh permission status and retry the input engine without requesting a new grant.", keywords: ["retry", "refresh", "access"], to: refresh) { [weak self] in self?.context.runtime.shortcuts.retry() }
+    }
+}
+
 final class WindowPageController: SettingsPageController {
     var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     override func build() {
@@ -59,6 +96,7 @@ final class WindowPageController: SettingsPageController {
         add(UI.caption("Live control of the window beneath your pointer, including inactive windows where macOS permits it."))
         let enabled = card("")
         toggle("Enable Window Resizer", key: .enabled, id: "window.enabled", description: "Enable the window utility. Resize and move gestures can be switched on independently below.", keywords: ["utility", "background", "window"], section: "", to: enabled)
+        permissionLink(.accessibility, to: enabled)
         let resize = card("Resize Windows")
         toggle("Resize Windows", key: .resizeEnabled, id: "window.resize.enabled", description: "Hold Command (⌘) and right-click near any of the four corners, then drag. The opposite corner stays in place.", keywords: ["cmd", "right click", "all four corners", "anchor"], section: "Resize Windows", to: resize, enabled: { prefs.bool(.enabled) })
         let popup = ActionPopup(items: ["Immediate", "After Small Drag"]) { prefs.set($0 == 0 ? "immediate" : "threshold", for: .activation) }

@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var quitting = false
     private var shutdownFinished = false
+    private var resetPermissionsOnQuit = false
     func applicationWillFinishLaunching(_ notification: Notification) { createMenu() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let preferences = PreferenceStore()
@@ -15,6 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let runtime = RuntimeCoordinator(preferences: preferences, permissions: permissions, logger: logger)
         let login = LoginService(preferences: preferences)
         context = SettingsContext(preferences: preferences, permissions: permissions, runtime: runtime, logger: logger, login: login)
+        context?.resetPermissionsAndQuit = { [weak self] in
+            guard let self = self, !self.quitting else { return }
+            self.resetPermissionsOnQuit = true
+            NSApp.terminate(nil)
+        }
         menuBar = MenuBarController(preferences: preferences, openSettings: { [weak self] in self?.showSettings(nil) }, restoreIcons: { [weak self] in self?.context?.iconAbsorber.restoreAll() })
         let event = NSAppleEventManager.shared().currentAppleEvent
         let properties = event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))
@@ -39,15 +45,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if shutdownFinished || context == nil { return .terminateNow }
         guard !quitting else { return .terminateLater }; quitting = true
         guard let context = context else { return .terminateNow }
+        context.permissions.stopMonitoringForTermination()
         menuBar?.shutdown()
         context.iconAbsorber.shutdown()
         context.runtime.shutdown { [weak self] in
-            context.logger.log("application", "shutdown", "Explicit application quit.")
-            context.logger.shutdown {
-                self?.shutdownFinished = true; NSApp.reply(toApplicationShouldTerminate: true)
-            }
+            guard let self = self else { return }
+            if self.resetPermissionsOnQuit {
+                Task { @MainActor in
+                    do {
+                        try await context.runtime.shortcuts.runner.waitForCancellation()
+                        try await PermissionResetter.reset(bundleIdentifier: Bundle.main.bundleIdentifier)
+                        context.logger.log("permissions", "reset", "App-scoped macOS privacy permission reset completed.")
+                    } catch {
+                        context.logger.log("permissions", "reset.failure", error.localizedDescription, severity: "WARN")
+                        let alert = NSAlert(); alert.alertStyle = .warning
+                        alert.messageText = "Couldn’t Reset All Permissions"
+                        alert.informativeText = error.localizedDescription + " Jimmy Tweaks will quit. Reopen it before trying again."
+                        alert.addButton(withTitle: "Quit"); alert.runModal()
+                    }
+                    self.finishTermination(context)
+                }
+            } else { self.finishTermination(context) }
         }
         return .terminateLater
+    }
+    private func finishTermination(_ context: SettingsContext) {
+        context.logger.log("application", "shutdown", "Explicit application quit.")
+        context.logger.shutdown { [weak self] in
+            self?.shutdownFinished = true; NSApp.reply(toApplicationShouldTerminate: true)
+        }
     }
     private func createMenu() {
         let main = NSMenu(), appItem = NSMenuItem(), appMenu = NSMenu(title: "Jimmy Tweaks")

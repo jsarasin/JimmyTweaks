@@ -177,8 +177,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError("Programmatic interface") }
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     private func buildPages() {
-        pages = [.general: GeneralPageController(.general, context: context), .window: WindowPageController(.window, context: context),
+        pages = [.permissions: PermissionsPageController(.permissions, context: context), .general: GeneralPageController(.general, context: context), .window: WindowPageController(.window, context: context),
             .iconAbsorber: IconAbsorberPageController(.iconAbsorber, context: context), .scripts: ScriptsPageController(.scripts, context: context),
+            .shortcuts: CustomShortcutsPageController(.shortcuts, context: context),
             .logging: LoggingPageController(.logging, context: context), .about: AboutPageController(.about, context: context)]
         for page in SettingsPage.allCases { _ = pages[page]?.view }
     }
@@ -195,7 +196,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         context.confirm = { [weak self] title, detail, completion in self?.confirm(title, detail: detail, completion: completion) }
         context.showMessage = { [weak self] title, detail in self?.message(title, detail: detail) }
         context.refresh = { [weak self] in self?.refreshAll() }
-        for name in [Notification.Name.preferencesChanged, .runtimeChanged, .permissionsChanged, .loggingChanged, .iconAbsorberChanged] {
+        for name in [Notification.Name.preferencesChanged, .runtimeChanged, .permissionsChanged, .loggingChanged, .iconAbsorberChanged, .shortcutsChanged] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refreshAll() })
         }
     }
@@ -261,13 +262,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     private func updatePermissionVisibility() {
         let visible = window?.isVisible == true && window?.isMiniaturized != true && !searching
-        context.permissions.setDetailed("general-page", visible: visible && currentPage == .general)
+        context.permissions.setDetailed("permissions-page", visible: visible && currentPage == .permissions)
         (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(visible && currentPage == .iconAbsorber)
     }
     func windowDidMiniaturize(_ notification: Notification) { updatePermissionVisibility() }
     func windowDidDeminiaturize(_ notification: Notification) { updatePermissionVisibility() }
     func windowWillClose(_ notification: Notification) {
-        context.permissions.setDetailed("general-page", visible: false)
+        context.permissions.setDetailed("permissions-page", visible: false)
         (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(false)
     }
 }

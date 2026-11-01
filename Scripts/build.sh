@@ -22,7 +22,9 @@ xcrun swiftc -swift-version 5 -target arm64-apple-macosx27.0 -sdk "$(xcrun --sho
 bash "$PROJECT_ROOT/Scripts/build-icon-absorber-agent.sh" "$APP_BUNDLE/Contents/Helpers"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
-xcrun swift -module-cache-path "$BUILD_ROOT/ModuleCache" "$PROJECT_ROOT/Scripts/make-icon.swift" "$BUILD_ROOT/AppIcon.iconset"
+xcrun swiftc -module-cache-path "$BUILD_ROOT/ModuleCache" \
+    "$PROJECT_ROOT/Sources/App/BrandIcon.swift" "$PROJECT_ROOT/Scripts/make-icon.swift" -o "$BUILD_ROOT/MakeIcon"
+"$BUILD_ROOT/MakeIcon" "$BUILD_ROOT/AppIcon.iconset"
 cp "$BUILD_ROOT/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$PROJECT_ROOT/Resources/PermissionGuidePortrait.png" "$APP_BUNDLE/Contents/Resources/PermissionGuidePortrait.png"
 xattr -cr "$APP_BUNDLE"

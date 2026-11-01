@@ -21,6 +21,7 @@ final class Locked<Value>: @unchecked Sendable {
 }
 
 enum PreferenceKey: String, CaseIterable {
+    case shortcutsEnabled = "customShortcuts.enabled"
     case suspended = "global.suspendAll"
     case enabled = "windowResizer.enabled"
     case resizeEnabled = "windowResizer.resizeEnabled"
@@ -41,7 +42,7 @@ enum PreferenceKey: String, CaseIterable {
 
     var defaultValue: Any {
         switch self {
-        case .suspended, .outline, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress: return false
+        case .shortcutsEnabled, .suspended, .outline, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress: return false
         case .iconAbsorberPositionPanels: return true
         case .enabled, .resizeEnabled, .moveEnabled, .cursor, .hints, .animatedEffects, .showMenuBarIcon: return true
         case .activation: return "immediate"
@@ -138,6 +139,7 @@ final class PreferenceStore {
     func resetWindow() { reset(keys: PreferenceKey.allCases.filter { $0.rawValue.hasPrefix("windowResizer.") }) }
     func resetAll() {
         defaults.removeObject(forKey: "iconAbsorber.applications")
+        defaults.removeObject(forKey: "customShortcuts.definitions")
         reset(keys: PreferenceKey.allCases)
         defaults.removeObject(forKey: "NSWindow Frame JimmyTweaks.Settings")
     }
