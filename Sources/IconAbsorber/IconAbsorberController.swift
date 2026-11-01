@@ -1,6 +1,53 @@
 import AppKit
 import ApplicationServices
 
+/// One original-control invocation, with cancellation checked after blocking AX reads.
+enum StatusItemInvocation {
+    struct Operations {
+        var readWindows: (pid_t) -> [AXUIElement] = { pid in
+            let root = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(root, 0.25)
+            return StatusItemAccess.value(root, kAXWindowsAttribute) ?? []
+        }
+        var performAction: (AXUIElement, String) -> AXError = { element, action in
+            if action == kAXPressAction { AXUIElementSetMessagingTimeout(element, 3) }
+            return AXUIElementPerformAction(element, action as CFString)
+        }
+        var canPost: () -> Bool = { CGPreflightPostEventAccess() }
+        var hitOwner: (CGPoint) -> pid_t? = { point in
+            let root = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(root, 0.25)
+            var hit: AXUIElement?, pid: pid_t = 0
+            guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &hit) == .success, let hit,
+                  AXUIElementGetPid(hit, &pid) == .success else { return nil }
+            return pid
+        }
+        var post: (CGEvent, pid_t) -> Void = { event, pid in event.postToPid(pid) }
+    }
+    struct Result { let windowsBefore: [AXUIElement]; let error: AXError }
+
+    static func invoke(_ item: AbsorbedStatusItem, rightClick: Bool, stillValid: () -> Bool,
+                       operations: Operations = Operations()) -> Result? {
+        guard stillValid() else { return nil }
+        let before = operations.readWindows(item.pid)
+        guard stillValid() else { return nil }
+        if !rightClick || item.actions.contains(kAXShowMenuAction) {
+            let action = rightClick ? kAXShowMenuAction : kAXPressAction
+            guard stillValid() else { return nil }
+            return Result(windowsBefore: before, error: operations.performAction(item.element, action))
+        }
+        guard operations.canPost(), let rect = item.frame else { return Result(windowsBefore: before, error: .notImplemented) }
+        let point = CGPoint(x: rect.midX, y: rect.midY)
+        let owner = operations.hitOwner(point)
+        guard stillValid() else { return nil }
+        guard owner == item.pid else { return Result(windowsBefore: before, error: .invalidUIElement) }
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right) else { return Result(windowsBefore: before, error: .failure) }
+        guard stillValid() else { return nil }
+        // Once admitted, finish the pair even if cancellation arrives after the down.
+        for event in [down, up] { event.setIntegerValueField(.mouseEventClickState, value: 1); operations.post(event, item.pid) }
+        return Result(windowsBefore: before, error: .success)
+    }
+}
+
 final class IconAbsorberController {
     let preferences: PreferenceStore
     let permissions: PermissionCoordinator
@@ -8,11 +55,16 @@ final class IconAbsorberController {
     private let service = IconAssertionClient()
     private let worker = DispatchQueue(label: "JimmyTweaks.iconAbsorber.accessibility", qos: .userInitiated)
     private let scanItems: () -> StatusItemSnapshot
+    private let invocationOperations: StatusItemInvocation.Operations
+    private let surfaces: () -> [StatusItemAccess.Surface]
+    private let now: () -> Date
     private(set) var items: [AbsorbedStatusItem] = []
     private(set) var images: [String: NSImage] = [:]
     private(set) var state = "Disabled"
     private(set) var detail = "Choose applications to absorb their menu bar items."
     private(set) var failure: String?
+    private(set) var invocationMessage: String?
+    private(set) var invocationFailed = false
     private(set) var capturing = false
     private(set) var snapshot = StatusItemSnapshot()
     private var observations: [NSObjectProtocol] = []
@@ -49,9 +101,14 @@ final class IconAbsorberController {
     private var stopped = false
     private var wasActive = false
 
-    init(preferences: PreferenceStore, permissions: PermissionCoordinator, logger: FileLogger, scanItems: @escaping () -> StatusItemSnapshot = StatusItemAccess.scan) {
+    init(preferences: PreferenceStore, permissions: PermissionCoordinator, logger: FileLogger,
+         scanItems: @escaping () -> StatusItemSnapshot = StatusItemAccess.scan,
+         invocationOperations: StatusItemInvocation.Operations = StatusItemInvocation.Operations(),
+         surfaces: @escaping () -> [StatusItemAccess.Surface] = StatusItemAccess.surfaces,
+         now: @escaping () -> Date = Date.init) {
         self.preferences = preferences; self.permissions = permissions; self.logger = logger
         self.scanItems = scanItems
+        self.invocationOperations = invocationOperations; self.surfaces = surfaces; self.now = now
         service.onFailure = { [weak self] message in self?.fail(message) }
         observations.append(NotificationCenter.default.addObserver(forName: .preferencesChanged, object: preferences, queue: .main) { [weak self] _ in self?.reconcile() })
         observations.append(NotificationCenter.default.addObserver(forName: .permissionsChanged, object: permissions, queue: .main) { [weak self] _ in self?.permissionsDidChange() })
@@ -74,7 +131,17 @@ final class IconAbsorberController {
     var selectedBundles: [String] { preferences.iconAbsorberSelection.bundles }
     var absorbedItems: [AbsorbedStatusItem] { selectedBundles.flatMap { bundle in items.filter { $0.bundle == bundle }.sorted { $0.index < $1.index } } }
     var isHolding: Bool { service.held }
-    var canInvokeStatusItems: Bool { active && !capturing && snapshot.unsupportedSystemItems.isEmpty }
+    var previewBlockedReason: String? {
+        if stopped { return "Jimmy Tweaks is stopping." }
+        if !enabled { return "Enable Icon Absorber to open selected applications from the preview." }
+        if preferences.bool(.suspended) { return "Resume All to open applications from the preview." }
+        if !sessionActive { return "Preview controls are paused while this session is inactive." }
+        if !permissions.accessibility { return "Preview controls need Accessibility access. Review Permissions → Accessibility." }
+        if capturing { return "Wait for icon pictures to finish capturing before opening controls." }
+        return nil
+    }
+    // Opening an original status item does not require a visibility assertion.
+    var canInvokeStatusItems: Bool { previewBlockedReason == nil }
     func isAbsorbed(_ bundle: String) -> Bool { service.held && selectedBundles.contains(bundle) && !temporaryAllowed.contains(bundle) }
     var active: Bool { enabled && !preferences.bool(.suspended) && sessionActive && permissions.accessibility && failure == nil && !stopped }
     var applicationListMessage: String? {
@@ -97,7 +164,7 @@ final class IconAbsorberController {
         preferences.iconAbsorberSelection = selection
     }
     func restoreAll() { preferences.set(false, for: .iconAbsorberEnabled) }
-    func retry() { failure = nil; scanned = false; pausedForInteraction = false; reconcile(force: true); refresh() }
+    func retry() { failure = nil; setInvocationMessage(nil); scanned = false; pausedForInteraction = false; reconcile(force: true); refresh() }
     func refresh() {
         guard !stopped else { return }
         if pausedForInteraction { pausedForInteraction = false }
@@ -105,6 +172,14 @@ final class IconAbsorberController {
         reconcile(force: true); scheduleScan()
     }
     private func changed() { NotificationCenter.default.post(name: .iconAbsorberChanged, object: self) }
+    private func setInvocationMessage(_ message: String?, failed: Bool = false) {
+        guard invocationMessage != message || invocationFailed != failed else { return }
+        invocationMessage = message; invocationFailed = failed; changed()
+    }
+    private func invocationFailure(_ message: String, item: AbsorbedStatusItem) {
+        setInvocationMessage(message, failed: true)
+        logger.log("iconAbsorber", "invocation.failure", "target=\(item.bundle); \(message)", severity: "WARN")
+    }
     private func permissionsDidChange() {
         guard !stopped else { return }
         if !permissions.accessibility {
@@ -192,7 +267,10 @@ final class IconAbsorberController {
                     self.items.removeAll { CFEqual($0.element, element) }; self.changed()
                 }
                 if self.interaction?.pid == pid {
-                    if name == kAXMenuOpenedNotification { self.menuOpen = true; self.sawSurface = true }
+                    if name == kAXMenuOpenedNotification {
+                        self.menuOpen = true; self.sawSurface = true
+                        self.setInvocationMessage("Using the application’s original controls. Close them to finish.")
+                    }
                     if name == kAXMenuClosedNotification { self.menuOpen = false; self.finishInteraction() }
                 }
                 if name != kAXMenuOpenedNotification { self.scheduleScan() }
@@ -206,7 +284,7 @@ final class IconAbsorberController {
         let hidden = Set(selectedBundles).intersection(running).subtracting(temporaryAllowed)
         if !hidden.isEmpty && !snapshot.unsupportedSystemItems.isEmpty {
             applyRevision &+= 1; lastHidden = nil; service.stop(); stopClockMonitor()
-            setState("Compatibility Pause", "All items are restored because this menu bar contains Apple controls the visibility API cannot preserve: " + snapshot.unsupportedSystemItems.joined(separator: ", ") + ".")
+            setState("Compatibility Pause", "All items are restored because this menu bar contains Apple controls the visibility API cannot preserve: " + snapshot.unsupportedSystemItems.joined(separator: ", ") + ". Preview icons can still open their original controls.")
             completion?(false); return
         }
         guard lastHidden != hidden || completion != nil else { return }
@@ -220,7 +298,7 @@ final class IconAbsorberController {
             guard let self, self.applyRevision == revision, self.active else { return }
             switch result {
             case .success(let held):
-                self.setState(self.interaction == nil ? "Enabled" : "Controls Open", self.interaction == nil ? "\(hidden.count) application(s) absorbed. Click an icon in the desktop preview to open its original controls." : "Using the owning application's original interface. Its icon is hidden again when those controls close.")
+                self.setState(self.interaction == nil ? (held ? "Enabled" : "Ready") : "Controls Open", self.interaction == nil ? (held ? "\(hidden.count) application(s) absorbed. Click an icon in the desktop preview to open its original controls." : "No visibility restriction is active. Refresh applications to try hiding them again.") : "Using the owning application's original interface. Its icon is hidden again when those controls close.")
                 if held { self.startClockMonitor() } else { self.stopClockMonitor() }
                 completion?(true)
             case .failure(let error): self.fail(error.localizedDescription); completion?(false)
@@ -229,45 +307,44 @@ final class IconAbsorberController {
     }
     private func fail(_ message: String) {
         guard failure != message, !stopped else { return }
+        if let item = interaction { invocationFailure("Could not restore the original icon: " + message, item: item) }
         failure = message; cancelInteraction(); lastHidden = nil; service.stop(); stopClockMonitor()
         setState("Unavailable", message)
         logger.log("iconAbsorber", "visibility.failure", message, severity: "WARN")
     }
     func activate(_ item: AbsorbedStatusItem, rightClick: Bool = false, anchor: CGPoint? = nil, visibleFrame: CGRect = .zero) {
-        guard active, !capturing, selectedBundles.contains(item.bundle), snapshot.unsupportedSystemItems.isEmpty else { return }
-        beginInteraction(item, rightClick: rightClick, anchor: anchor, visibleFrame: visibleFrame)
+        if let reason = previewBlockedReason { setInvocationMessage(reason, failed: true); return }
+        guard selectedBundles.contains(item.bundle), let current = items.first(where: { $0.id == item.id && $0.pid == item.pid }) else {
+            invocationFailure("This status item is no longer available. Refresh the application list and try again.", item: item); return
+        }
+        beginInteraction(current, rightClick: rightClick, anchor: anchor, visibleFrame: visibleFrame)
     }
     private func beginInteraction(_ item: AbsorbedStatusItem, rightClick: Bool, anchor: CGPoint?, visibleFrame: CGRect, clock: Bool = false) {
         cancelInteraction(); pausedForInteraction = false
-        interaction = item; interactionStarted = Date(); invocationAnchor = anchor; invocationScreen = visibleFrame
-        interactionBaseline = Set(StatusItemAccess.surfaces().map(\.id)); let revision = interactionRevision
+        interaction = item; interactionStarted = now(); invocationAnchor = anchor; invocationScreen = visibleFrame
+        interactionBaseline = Set(surfaces().map(\.id)); let revision = interactionRevision
         let direct = !rightClick && !clock && preferences.bool(.iconAbsorberHiddenPress)
+        setInvocationMessage("Opening \(item.name)’s original controls…")
         let gate = Locked(true); interactionGate = gate
         func invoke(_ target: AbsorbedStatusItem) {
             guard revision == self.interactionRevision else { return }
             self.startInteractionTimer()
+            let operations = self.invocationOperations
             self.worker.async { [weak self] in
-                guard gate.snapshot else { return }
-                let root = AXUIElementCreateApplication(target.pid); AXUIElementSetMessagingTimeout(root, 0.25)
-                let before: [AXUIElement] = StatusItemAccess.value(root, kAXWindowsAttribute) ?? []
-                let result: AXError
-                if rightClick { result = Self.rightClick(target) }
-                else {
-                    AXUIElementSetMessagingTimeout(target.element, 3)
-                    result = AXUIElementPerformAction(target.element, kAXPressAction as CFString)
-                }
+                guard let result = StatusItemInvocation.invoke(target, rightClick: rightClick, stillValid: { gate.snapshot }, operations: operations) else { return }
                 DispatchQueue.main.async {
                     guard let self, revision == self.interactionRevision else { return }
-                    self.axWindowsBefore = before; self.pressReturned = true
-                    if result != .success && result != .cannotComplete {
-                        self.setState("Item Unavailable", "The application did not accept this action (Accessibility error \(result.rawValue)). Try refreshing the application list.")
+                    self.axWindowsBefore = result.windowsBefore; self.pressReturned = true
+                    if result.error != .success && result.error != .cannotComplete {
                         self.finishInteraction()
+                        self.invocationFailure("The application did not accept this action (Accessibility error \(result.error.rawValue)). Refresh the application list and try again.", item: target)
                     }
                 }
             }
         }
-        if direct {
-            setState("Opening Controls", "Trying AXPress while the icon remains hidden. Some applications require temporary restoration.")
+        if direct || !active || !snapshot.unsupportedSystemItems.isEmpty {
+            // Compatibility pauses and helper failures leave the real icon visible.
+            // Invoke it directly without trying to start the unavailable hiding service.
             invoke(item)
         } else {
             temporaryAllowed = clock ? Set(selectedBundles) : [item.bundle]
@@ -285,9 +362,9 @@ final class IconAbsorberController {
                     }
                     DispatchQueue.main.async {
                         guard revision == self.interactionRevision else { return }
-                        guard let settled else { self.finishInteraction(); self.setState("Item Unavailable", "The original icon could not be located after restoration."); return }
+                        guard let settled else { self.finishInteraction(); self.invocationFailure("The original icon could not be located after restoration. Refresh the application list and try again.", item: item); return }
                         if clock, let centerPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first?.processIdentifier {
-                            let alreadyOpen = StatusItemAccess.surfaces().filter { $0.pid == centerPID && $0.frame.width > 200 && $0.frame.height > 30 }
+                            let alreadyOpen = self.surfaces().filter { $0.pid == centerPID && $0.frame.width > 200 && $0.frame.height > 30 }
                             if !alreadyOpen.isEmpty {
                                 self.interactionBaseline.subtract(alreadyOpen.map(\.id)); self.sawSurface = true; self.pressReturned = true; self.startInteractionTimer(); return
                             }
@@ -298,19 +375,6 @@ final class IconAbsorberController {
             }
         }
     }
-    private static func rightClick(_ item: AbsorbedStatusItem) -> AXError {
-        if item.actions.contains(kAXShowMenuAction) { return AXUIElementPerformAction(item.element, kAXShowMenuAction as CFString) }
-        guard CGPreflightPostEventAccess(), let rect = item.frame else { return .notImplemented }
-        let point = CGPoint(x: rect.midX, y: rect.midY)
-        let root = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(root, 0.25)
-        var hit: AXUIElement?, pid: pid_t = 0
-        guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &hit) == .success, let hit,
-              AXUIElementGetPid(hit, &pid) == .success, pid == item.pid else { return .invalidUIElement }
-        guard let down = CGEvent(mouseEventSource: nil, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right),
-              let up = CGEvent(mouseEventSource: nil, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right) else { return .failure }
-        for event in [down, up] { event.setIntegerValueField(.mouseEventClickState, value: 1); event.postToPid(item.pid) }
-        return .success
-    }
     private func startInteractionTimer() {
         let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in self?.checkInteraction() }
         RunLoop.main.add(timer, forMode: .common); interactionTimer = timer
@@ -319,28 +383,38 @@ final class IconAbsorberController {
         guard let item = interaction else { return }
         let clock = item.bundle == "com.apple.MenuBarAgent"
         let centerPID = clock ? NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first?.processIdentifier : nil
-        let surfaces = StatusItemAccess.surfaces().filter { !interactionBaseline.contains($0.id) && ($0.pid == item.pid || $0.pid == centerPID) && $0.frame.width > 40 && $0.frame.height > 25 }
+        let surfaces = self.surfaces().filter { !interactionBaseline.contains($0.id) && ($0.pid == item.pid || $0.pid == centerPID) && $0.frame.width > 40 && $0.frame.height > 25 }
         let open = menuOpen || !surfaces.isEmpty
-        if open { sawSurface = true; quietTicks = 0 }
+        if open {
+            if !sawSurface { setInvocationMessage("Using the application’s original controls. Close them to finish.") }
+            sawSurface = true; quietTicks = 0
+        }
         else if pressReturned { quietTicks += 1 }
         if !clock, open, !panelPositioned, pressReturned, preferences.bool(.iconAbsorberPositionPanels), let anchor = invocationAnchor {
             panelPositioned = true; let baseline = axWindowsBefore; let visible = invocationScreen; let gate = interactionGate
             worker.async { StatusItemAccess.repositionFloatingPanel(pid: item.pid, excluding: baseline, near: anchor, within: visible, stillValid: { gate?.snapshot == true }) }
         }
-        if !open, pressReturned, (sawSurface && quietTicks >= 2 || !sawSurface && Date().timeIntervalSince(interactionStarted) > 2) {
+        if !open, pressReturned, (sawSurface && quietTicks >= 2 || !sawSurface && now().timeIntervalSince(interactionStarted) > 2) {
             let detected = sawSurface; finishInteraction()
-            if !detected { setState("Enabled", "No original menu or panel was detected. If this item requires restoration, turn off ‘Keep icons hidden when opening controls’. Right-click support varies by application.") }
-        } else if Date().timeIntervalSince(interactionStarted) > 120 {
+            if !detected { invocationFailure("No original menu or panel was detected. If ‘Keep icons hidden when opening controls’ is on, turn it off and try again. Right-click support varies by application.", item: item) }
+        } else if now().timeIntervalSince(interactionStarted) > 120 {
             // Never tear down a long-lived original interface just to reclaim its icon.
             cancelInteraction(); applyRevision &+= 1; service.stop(); lastHidden = nil; pausedForInteraction = true
             setState("Paused for Controls", "The original interface is still open. All icons are restored; choose Refresh after closing it to resume absorption.")
         }
     }
-    private func finishInteraction() { cancelInteraction(); lastHidden = nil; applyVisibility() }
+    private func finishInteraction() {
+        let opened = sawSurface
+        cancelInteraction()
+        if opened { setInvocationMessage("The application’s original controls have closed.") }
+        lastHidden = nil; applyVisibility()
+    }
     private func cancelInteraction() {
+        let wasInvoking = interaction != nil
         interactionRevision &+= 1; interactionGate?.withValue { $0 = false }; interactionGate = nil
         interactionTimer?.invalidate(); interactionTimer = nil; interaction = nil; temporaryAllowed = []
         menuOpen = false; sawSurface = false; quietTicks = 0; pressReturned = false; panelPositioned = false
+        if wasInvoking && !invocationFailed { setInvocationMessage(nil) }
     }
     private func startClockMonitor() {
         guard clockMonitor == nil else { return }

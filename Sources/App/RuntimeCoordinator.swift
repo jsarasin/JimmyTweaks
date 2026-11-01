@@ -24,7 +24,7 @@ final class RuntimeCoordinator: NSObject {
     private var failureDetail = ""
     private var wasEnabled: Bool
     private var sessionActive = true
-    private var shutdownCompletion: (() -> Void)?
+    private var shutdownCompletion: ((Result<Void, Error>) -> Void)?
     private var shuttingDown = false
     private(set) var state: RuntimeState = .disabled
     private(set) var detail = ""
@@ -178,11 +178,23 @@ final class RuntimeCoordinator: NSObject {
         logger.log("runtime", "state", state.rawValue + ": " + detail)
         NotificationCenter.default.post(name: .runtimeChanged, object: self)
     }
-    func shutdown(completion: @escaping () -> Void) {
+    func shutdown(completion: @escaping (Result<Void, Error>) -> Void) {
         shuttingDown = true; shutdownCompletion = completion; cancelRetry(); stableWork?.cancel(); feedback.clear()
         shortcuts.shutdown()
         if let engine = engine { engineStopping = true; engine.stop(discardPending: !sessionActive, forceAfter: 0.5) }
         else { completeShutdown() }
     }
-    private func completeShutdown() { let completion = shutdownCompletion; shutdownCompletion = nil; completion?() }
+    private func completeShutdown() {
+        guard let completion = shutdownCompletion else { return }
+        shutdownCompletion = nil
+        Task { @MainActor in
+            do {
+                try await shortcuts.runner.waitForCancellation()
+                completion(.success(()))
+            } catch {
+                logger.log("application", "shutdown.cancellation.failure", error.localizedDescription, severity: "WARN")
+                completion(.failure(error))
+            }
+        }
+    }
 }

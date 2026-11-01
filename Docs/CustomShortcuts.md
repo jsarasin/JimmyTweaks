@@ -32,6 +32,8 @@ Escape cancels every running task and pending dispatch, including while Jimmy Tw
 
 Delay uses cancellable `Task.sleep`. Screen selection invokes only `/usr/sbin/screencapture -i -s -c`; it creates no output file or custom overlay. It waits for the initiating mouse button's physical release, awaits process completion, and verifies a new image on the clipboard. Cancellation or utility failure stops the sequence. Native selections are serialized when concurrent sequences reach screenshot actions; the sequences otherwise remain independent. New shortcut and Window Resizer gesture admission is paused during screenshot selection to avoid recursion. Cancellation terminates only the owned utility process, with bounded escalation if termination fails. Operating-system operations may take time to acknowledge termination.
 
+Quitting waits up to three seconds for action cancellation after input cleanup, including the owned process's one-second forced-termination fallback. A cancellation timeout is logged; a pending permission reset is skipped if cancellation did not finish.
+
 ## Extending actions and future scripts
 
 `ShortcutActionDefinition` supplies a stable ID, name/category/description, default parameters, summary, validation, optional AppKit editor, and asynchronous execution closure. The editor and picker contain no switch over built-in action types. Register or remove definitions through `ShortcutActionRegistry`; the picker and configured action names refresh dynamically. Unavailable definitions remain stored and are marked explicitly, and their shortcuts stay inactive.

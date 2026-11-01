@@ -85,6 +85,30 @@ enum EngineTests {
             assert(!engine.hasDeferredReplayForTesting)
             assert(!engine.ownsSequenceForTesting)
         }
-        print("Engine regressions passed: disable during final writes and discard deferred replay, including stop escalation.")
+        // Wait for a child that ignores SIGTERM, including its delayed SIGKILL,
+        // before allowing ordinary shutdown to complete.
+        let prefs = PreferenceStore(defaults: MemoryDefaults()); prefs.set(true, for: .suspended)
+        let permissions = PermissionCoordinator(checkAccessibility: { false }, checkEventPosting: { false }, requestEventPosting: { false },
+                                              checkListening: { false }, requestListening: { false }, checkScreenRecording: { false })
+        let runtime = RuntimeCoordinator(preferences: prefs, permissions: permissions, logger: logger)
+        let readyFile = logger.directory.appendingPathComponent("shutdown-child-\(UUID().uuidString).ready")
+        try! FileManager.default.createDirectory(at: logger.directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: readyFile) }
+        let child = OwnedShortcutProcess(executable: URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path,
+                                         arguments: ["--shutdown-child", readyFile.path])
+        runtime.shortcuts.registry.register(ShortcutActionDefinition(id: "test.shutdown-child", name: "Shutdown child", category: "Test", description: "") { _, _ in _ = try await child.run() })
+        var shortcut = ShortcutDefinition(); shortcut.actions = [ShortcutActionInstance(actionID: "test.shutdown-child")]
+        assert(runtime.shortcuts.runner.start(shortcut))
+        wait { FileManager.default.fileExists(atPath: readyFile.path) }
+        var shutdownFinished = false
+        runtime.shutdown { result in
+            if case .failure(let error) = result { assertionFailure(error.localizedDescription) }
+            assert(!child.isRunning && !runtime.shortcuts.runner.isRunning, "Shutdown must finish owned process cancellation before completion")
+            shutdownFinished = true
+        }
+        for _ in 0..<3 { settle() }
+        assert(!shutdownFinished && child.isRunning, "A SIGTERM-resistant child keeps shutdown pending")
+        wait { shutdownFinished }
+        print("Engine regressions passed: final-write cancellation, balanced deferred replay/discard, and shutdown through owned-process escalation.")
     }
 }

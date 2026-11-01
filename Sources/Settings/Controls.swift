@@ -149,9 +149,9 @@ final class SettingsContext {
     var showMessage: ((String, String) -> Void)?
     var refresh: (() -> Void)?
     var resetPermissionsAndQuit: (() -> Void)?
-    init(preferences: PreferenceStore, permissions: PermissionCoordinator, runtime: RuntimeCoordinator, logger: FileLogger, login: LoginService) {
+    init(preferences: PreferenceStore, permissions: PermissionCoordinator, runtime: RuntimeCoordinator, logger: FileLogger, login: LoginService, iconAbsorber: IconAbsorberController? = nil) {
         self.preferences = preferences; self.permissions = permissions; self.runtime = runtime; self.logger = logger; self.login = login
-        iconAbsorber = IconAbsorberController(preferences: preferences, permissions: permissions, logger: logger)
+        self.iconAbsorber = iconAbsorber ?? IconAbsorberController(preferences: preferences, permissions: permissions, logger: logger)
     }
     func openLog() {
         logger.flush { [weak self] result in

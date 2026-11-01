@@ -2,6 +2,12 @@ import AppKit
 
 @main struct UISmoke {
     static func main() throws {
+        if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--shutdown-child" {
+            signal(SIGTERM, SIG_IGN)
+            try Data().write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+            Thread.sleep(forTimeInterval: 30)
+            return
+        }
         let app = NSApplication.shared; app.setActivationPolicy(.accessory); app.finishLaunching()
         let root = URL(fileURLWithPath: CommandLine.arguments[1]); try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let prefs = PreferenceStore(defaults: MemoryDefaults()); prefs.set(true, for: .suspended)
@@ -9,7 +15,10 @@ import AppKit
         let runtime = RuntimeCoordinator(preferences: prefs, permissions: permissions, logger: logger)
         let context = SettingsContext(preferences: prefs, permissions: permissions, runtime: runtime, logger: logger, login: LoginService(preferences: prefs))
         EngineTests.run(logger: logger)
+        PermissionTests.run()
         ShortcutTests.run(logger: logger)
+        SettingsRegressionTests.run(logger: logger)
+        IconAbsorberPreviewTests.run(logger: logger)
         let controller = SettingsWindowController(context: context)
         guard let window = controller.window else { fatalError("Settings window missing") }
         window.layoutIfNeeded()

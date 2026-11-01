@@ -73,7 +73,9 @@ final class CustomShortcutsPageController: SettingsPageController, NSTableViewDa
         add(UI.label("Shortcut", size: 14, weight: .semibold), to: configuration); add(title, to: configuration)
         let record = ActionButton(shortcut.combination?.display ?? "Record Shortcut…") { [weak self] in
             guard let self = self, let current = self.shortcut else { return }
-            self.context.runtime.shortcuts.record(current) { [weak self] combination in self?.edit(validate: true) { $0.combination = combination } }
+            self.context.runtime.shortcuts.record(current) { [weak self] combination in
+                self?.edit(shortcutID: current.id, validate: true) { $0.combination = combination }
+            }
         }
         let clear = ActionButton("Clear") { [weak self] in self?.edit { $0.combination = nil } }
         add(UI.horizontal([record, clear, NSView()]), to: configuration)
@@ -119,16 +121,19 @@ final class CustomShortcutsPageController: SettingsPageController, NSTableViewDa
             }, to: actionConfiguration)
         }
     }
-    private func edit(validate: Bool = false, rebuild: Bool = true, _ mutate: (inout ShortcutDefinition) -> Void) {
-        guard var current = shortcut else { return }
+    private func edit(shortcutID: UUID? = nil, validate: Bool = false, rebuild: Bool = true, _ mutate: (inout ShortcutDefinition) -> Void) {
+        guard var current = rows.first(where: { $0.id == (shortcutID ?? selectedID) }) else { return }
         mutate(&current)
         if validate, let error = ShortcutConflictChecker.error(for: current, among: rows, gestures: context.preferences.gesture) {
             context.showMessage?("Shortcut Unavailable", error); displayed = nil; self.rebuild(); return
         }
         guard let index = rows.firstIndex(where: { $0.id == current.id }) else { return }
         rows[index] = current; save()
-        shortcutsTable.reloadData(); actionsTable.reloadData(); displayed = current
-        if rebuild { self.rebuild() }
+        shortcutsTable.reloadData(); actionsTable.reloadData()
+        if current.id == selectedID {
+            displayed = current
+            if rebuild { self.rebuild() }
+        }
     }
     private func save() { saving = true; context.preferences.shortcuts = rows; saving = false; status.stringValue = context.runtime.shortcuts.status }
     private func addShortcut() {

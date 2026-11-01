@@ -59,6 +59,49 @@ import AppKit
         trusted = false; discoveryPermissions.refresh()
         check(discovery.items.isEmpty && discovery.applicationListMessage?.contains("Permissions → Accessibility") == true, "Revocation clears stale discoveries and restores guidance")
         discovery.shutdown()
+        // Controlled native-operation boundaries: no status item is invoked and
+        // no mouse event is posted to another process by these checks.
+        func item(actions: [String] = []) -> AbsorbedStatusItem {
+            AbsorbedStatusItem(id: "test/item", bundle: other, name: "Test", pid: 12345, index: 0, identifier: "item", label: "",
+                               element: AXUIElementCreateApplication(12345), frame: CGRect(x: 100, y: 10, width: 24, height: 24), actions: actions)
+        }
+        for rightClick in [false, true] {
+            var valid = true, actionCalls = 0, ownerChecks = 0, posts = 0
+            var operations = StatusItemInvocation.Operations()
+            operations.readWindows = { _ in valid = false; return [] }
+            operations.performAction = { _, _ in actionCalls += 1; return .success }
+            operations.canPost = { true }
+            operations.hitOwner = { _ in ownerChecks += 1; return 12345 }
+            operations.post = { _, _ in posts += 1 }
+            for actions in [[], [kAXShowMenuAction]] {
+                valid = true
+                let result = StatusItemInvocation.invoke(item(actions: actions), rightClick: rightClick, stillValid: { valid }, operations: operations)
+                check(result == nil && actionCalls == 0 && ownerChecks == 0 && posts == 0,
+                      "Cancellation during the windows read prevents AXPress, AXShowMenu, and right-click posting")
+            }
+        }
+        var valid = true, posts: [CGEventType] = []
+        var operations = StatusItemInvocation.Operations()
+        operations.readWindows = { _ in [] }
+        operations.performAction = { _, _ in preconditionFailure("The right-click fallback must not perform an AX action") }
+        operations.canPost = { true }
+        operations.hitOwner = { _ in valid = false; return 12345 }
+        operations.post = { event, pid in check(pid == 12345, "Posting is scoped to the item's owner"); posts.append(event.type); valid = false }
+        check(StatusItemInvocation.invoke(item(), rightClick: true, stillValid: { valid }, operations: operations) == nil && posts.isEmpty,
+              "Cancellation during owner hit testing prevents both right-click events")
+        valid = true; operations.hitOwner = { _ in 12345 }
+        check(StatusItemInvocation.invoke(item(), rightClick: true, stillValid: { valid }, operations: operations)?.error == .success,
+              "An admitted right-click pair completes even if cancellation follows its down")
+        check(posts == [.rightMouseDown, .rightMouseUp], "An admitted pair never leaves an orphan mouse down")
+        for (rightClick, expectedAction) in [(false, kAXPressAction), (true, kAXShowMenuAction)] {
+            var actions: [String] = []
+            operations.performAction = { _, action in actions.append(action); return .success }
+            let result = StatusItemInvocation.invoke(item(actions: [kAXShowMenuAction]), rightClick: rightClick, stillValid: { true }, operations: operations)
+            check(result?.error == .success && actions == [expectedAction], "Valid original-control invocations retain their native action")
+        }
+        var reads = 0; operations.readWindows = { _ in reads += 1; return [] }
+        check(StatusItemInvocation.invoke(item(), rightClick: false, stillValid: { false }, operations: operations) == nil && reads == 0,
+              "Already cancelled requests perform no AX reads")
         client.stop(); module.shutdown()
         print("Icon Absorber: \(checks) selection, persistence, permission and service-isolation checks passed. No live hiding or private assertions used.")
     }

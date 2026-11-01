@@ -12,7 +12,7 @@ private final class StatusIconButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError("Programmatic interface") }
     @objc private func pressed() { open?(false) }
-    override func rightMouseDown(with event: NSEvent) { open?(true) }
+    override func rightMouseDown(with event: NSEvent) { if isEnabled { open?(true) } }
 }
 
 /// Native drawing of an upper-right desktop slice. It never captures other apps.
@@ -141,6 +141,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
     private let detailLabel = UI.caption("")
     private let wallpaperLabel = UI.caption("")
     private let pictureLabel = UI.caption("")
+    private let invocationLabel = UI.caption("")
     private let applicationsMessage = UI.caption("")
     private var rows: [AppRow] = []
     private var wallpaperTimer: Timer?
@@ -153,6 +154,8 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         metadata(desktop, id: "iconAbsorber.preview", label: "Desktop Preview", description: "An upper-right slice of your desktop showing selected applications and the current clock. Click or right-click an icon to invoke its original controls.", keywords: ["wallpaper", "virtual status bar", "menu bar", "icons", "clock"], section: "Desktop Preview")
         metadata(desktop.clock, id: "iconAbsorber.preview.clock", label: "Preview Clock", description: "Current local date and time, refreshed while the preview is visible.", keywords: ["time", "date", "clock"], section: "Desktop Preview")
         add(wallpaperLabel); add(pictureLabel)
+        add(invocationLabel)
+        metadata(invocationLabel, id: "iconAbsorber.invocation", label: "Preview Controls Status", description: "Why preview controls are unavailable, or the result of opening an application's original controls.", keywords: ["click", "open", "menu", "failure"], section: "Desktop Preview")
         let settings = card("Icon Absorber")
         toggle("Enable Icon Absorber", key: .iconAbsorberEnabled, id: "iconAbsorber.enabled", description: "Hide status items belonging to your selected applications. Disable this module or choose Restore All to bring them back.", keywords: ["hide", "absorb", "menu", "status", "icons"], section: "Icon Absorber", to: settings)
         add(stateLabel, to: settings); add(detailLabel, to: settings)
@@ -177,7 +180,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         add(UI.horizontal([moveUp, moveDown, NSView(), refresh]), to: apps)
         metadata(refresh, id: "iconAbsorber.refresh", label: "Refresh Applications", description: "Refresh discovery and retry the visibility service after a compatibility or permission change.", section: "Applications")
         let behavior = card("Original Controls")
-        toggle("Keep icons hidden when opening controls", key: .iconAbsorberHiddenPress, id: "iconAbsorber.hiddenPress", description: "Try AXPress without restoring the physical icon. This is experimental and depends on the application. Leave off to restore briefly and hide again when its original controls close.", keywords: ["AXPress", "hidden", "popover"], section: "Original Controls", to: behavior)
+        toggle("Keep icons hidden when opening controls", key: .iconAbsorberHiddenPress, id: "iconAbsorber.hiddenPress", description: "Experimental. Some applications cannot open controls while their menu bar icon is hidden. Turn this off if preview clicks do not open anything; the original icon will be restored temporarily.", keywords: ["AXPress", "hidden", "popover"], section: "Original Controls", to: behavior)
         toggle("Position movable panels near the preview", key: .iconAbsorberPositionPanels, id: "iconAbsorber.positionPanels", description: "Best effort for accessible floating panels only. Native menus and protected or inaccessible surfaces appear in their normal position.", keywords: ["position", "move", "panel", "popover"], section: "Original Controls", to: behavior)
         action("Refresh Icon Pictures", id: "iconAbsorber.pictures", description: "Capture the original status icons from the menu-bar window. Requires optional Screen Recording permission; no other app windows are captured.", section: "Desktop Preview", to: behavior, enabled: { [weak self] in self?.module.capturing == false }) { [weak self] in self?.module.refreshPictures() }
         permissionLink(.screenRecording, title: "Screen Recording for original icon pictures…", to: behavior)
@@ -223,13 +226,20 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         let originals = module.absorbedItems
         desktop.emptyText = selected.isEmpty ? "Choose applications below" : "Selected status items are unavailable"
         desktop.update(items: originals, images: module.images, enabled: module.canInvokeStatusItems) { [weak self] item, right, view in
-            guard let self, let window = view.window, let primaryHeight = NSScreen.screens.first?.frame.height else { return }
-            let rect = window.convertToScreen(view.convert(view.bounds, to: nil))
-            let screen = window.screen?.visibleFrame ?? .zero
-            let visible = CGRect(x: screen.minX, y: primaryHeight - screen.maxY, width: screen.width, height: screen.height)
-            self.module.activate(item, rightClick: right, anchor: CGPoint(x: rect.minX, y: primaryHeight - rect.minY + 8), visibleFrame: visible)
+            guard let self else { return }
+            var anchor: CGPoint?, visible = CGRect.zero
+            if let window = view.window, let primaryHeight = NSScreen.screens.first?.frame.height {
+                let rect = window.convertToScreen(view.convert(view.bounds, to: nil))
+                let screen = window.screen?.visibleFrame ?? .zero
+                visible = CGRect(x: screen.minX, y: primaryHeight - screen.maxY, width: screen.width, height: screen.height)
+                anchor = CGPoint(x: rect.minX, y: primaryHeight - rect.minY + 8)
+            }
+            self.module.activate(item, rightClick: right, anchor: anchor, visibleFrame: visible)
         }
         let missing = originals.filter { module.images[$0.id] == nil }.count
+        invocationLabel.stringValue = module.previewBlockedReason ?? module.invocationMessage ?? ""
+        invocationLabel.isHidden = invocationLabel.stringValue.isEmpty
+        invocationLabel.textColor = module.previewBlockedReason != nil ? .systemOrange : module.invocationFailed ? .systemRed : .secondaryLabelColor
         pictureLabel.stringValue = module.capturing ? "Capturing original status icons…" : (originals.isEmpty ? "Select applications below to add their status items to the preview." : (missing > 0 ? "\(missing) item(s) use application icons. Refresh Icon Pictures to capture their original status icons." : "Click an icon to open its original controls. Right-click for the original secondary action."))
         updateWallpaper()
     }

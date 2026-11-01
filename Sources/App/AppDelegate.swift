@@ -48,12 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         context.permissions.stopMonitoringForTermination()
         menuBar?.shutdown()
         context.iconAbsorber.shutdown()
-        context.runtime.shutdown { [weak self] in
+        context.runtime.shutdown { [weak self] result in
             guard let self = self else { return }
             if self.resetPermissionsOnQuit {
                 Task { @MainActor in
                     do {
-                        try await context.runtime.shortcuts.runner.waitForCancellation()
+                        try result.get()
                         try await PermissionResetter.reset(bundleIdentifier: Bundle.main.bundleIdentifier)
                         context.logger.log("permissions", "reset", "App-scoped macOS privacy permission reset completed.")
                     } catch {

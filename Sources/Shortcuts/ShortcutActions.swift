@@ -178,7 +178,7 @@ final class ShortcutActionRunner {
     @MainActor func waitForCancellation() async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         while isRunning {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { throw ShortcutActionError(message: "Running actions did not finish cancelling. Permissions were not reset.") }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { throw ShortcutActionError(message: "Running actions did not finish cancelling within 3 seconds.") }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
     }

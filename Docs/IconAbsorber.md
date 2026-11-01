@@ -86,10 +86,23 @@ notifications and temporary surface monitoring reapply hiding after the original
 controls close. The optional hidden-AXPress path uses the cached original AX
 element while keeping the assertion; it has no silent reveal fallback.
 
+Preview invocation remains available during a hiding compatibility pause or a
+visibility-helper failure: the original icons are restored, and opening their
+controls does not need that service. Module disable, Suspend All, session loss,
+missing Accessibility access, and picture capture still block invocation, with a
+reason shown immediately below the preview. Progress, rejected actions, and a
+failure to detect an original interface appear there separately from the hiding
+status and are not overwritten by a visibility refresh. If the experimental
+hidden-AXPress option opens nothing, turn it off to use temporary restoration.
+
 Right-click uses AXShowMenu when exposed, otherwise a target-process mouse event
 pair after validating the actual hit-test owner. It does not use global HID
 posting. Acceptance and behavior depend on the target and are not established by
 an event-posting return value.
+
+Cancellation is rechecked after the owner's window-list read and after right-click
+hit testing, before invoking a native action or posting a click. Once a right-click
+down has been posted, its matching up completes even if cancellation arrives.
 
 Only new, nonmodal Accessibility floating windows with a settable position and
 reasonable bounds are candidates for best-effort repositioning. Each write checks

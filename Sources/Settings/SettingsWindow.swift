@@ -48,17 +48,25 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
-    func clearSearch() { debounce?.cancel(); search.stringValue = ""; onQuery?("") }
+    func clearSearch() { debounce?.cancel(); debounce = nil; search.stringValue = ""; onQuery?("") }
     func controlTextDidChange(_ obj: Notification) {
         debounce?.cancel(); let text = search.stringValue
-        let work = DispatchWorkItem { [weak self] in self?.onQuery?(text) }; debounce = work
+        let work = DispatchWorkItem { [weak self] in self?.debounce = nil; self?.onQuery?(text) }; debounce = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
-    @objc private func submitSearch() { if !search.stringValue.isEmpty { onSearchCommand?("insertNewline:") } }
+    private func sendSearchCommand(_ name: String) {
+        if debounce != nil {
+            debounce?.cancel(); debounce = nil
+            onQuery?(search.stringValue)
+        }
+        guard !search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        onSearchCommand?(name)
+    }
+    @objc private func submitSearch() { if !search.stringValue.isEmpty { sendSearchCommand("insertNewline:") } }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         let name = NSStringFromSelector(commandSelector)
         if ["moveUp:", "moveDown:", "insertNewline:", "insertNewlineIgnoringFieldEditor:", "cancelOperation:"].contains(name), !search.stringValue.isEmpty {
-            if name == "cancelOperation:" { clearSearch() } else { onSearchCommand?(name.hasPrefix("insertNewline") ? "insertNewline:" : name) }; return true
+            if name == "cancelOperation:" { clearSearch() } else { sendSearchCommand(name.hasPrefix("insertNewline") ? "insertNewline:" : name) }; return true
         }
         return false
     }
