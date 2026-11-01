@@ -14,8 +14,10 @@ final class WindowTarget: @unchecked Sendable {
     let pid: pid_t
     let bundleID: String
     let seed: GestureSeed
-    init(element: AXUIElement, pid: pid_t, bundleID: String, seed: GestureSeed) {
+    let feedbackWindow: FeedbackWindow?
+    init(element: AXUIElement, pid: pid_t, bundleID: String, seed: GestureSeed, feedbackWindow: FeedbackWindow? = nil) {
         self.element = element; self.pid = pid; self.bundleID = bundleID; self.seed = seed
+        self.feedbackWindow = feedbackWindow
     }
 }
 
@@ -150,7 +152,8 @@ final class AccessibilityWindows: WindowAccessing, @unchecked Sendable {
                 }
                 guard valid(), let kind = kind else { completion(nil); return }
                 completion(WindowTarget(element: window, pid: pid, bundleID: app.bundleIdentifier ?? "unknown.application",
-                                        seed: GestureSeed(frame: frame, pointer: cursor, kind: kind)))
+                                        seed: GestureSeed(frame: frame, pointer: cursor, kind: kind),
+                                        feedbackWindow: FeedbackWindow.match(pid: pid, frame: frame)))
             }
         }
     }

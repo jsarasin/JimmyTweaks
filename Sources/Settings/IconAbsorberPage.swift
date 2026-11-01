@@ -124,6 +124,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
     private let detailLabel = UI.caption("")
     private let wallpaperLabel = UI.caption("")
     private let pictureLabel = UI.caption("")
+    private let applicationsMessage = UI.caption("")
     private var rows: [AppRow] = []
     private var wallpaperTimer: Timer?
     private var previewVisible = false
@@ -141,6 +142,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         restore.keyEquivalent = ""; restore.hasDestructiveAction = false
         let apps = card("Applications")
         add(UI.caption("Select whole applications. Drag selected rows to change their order in the preview. Apps that are not running stay saved."), to: apps)
+        add(applicationsMessage, to: apps)
         table.delegate = self; table.dataSource = self; table.rowHeight = 50; table.headerView = nil; table.style = .plain
         let check = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("selected")); check.width = 35; check.minWidth = 35; check.maxWidth = 35
         let name = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("application")); name.width = 250; name.minWidth = 160
@@ -159,9 +161,6 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         toggle("Keep icons hidden when opening controls", key: .iconAbsorberHiddenPress, id: "iconAbsorber.hiddenPress", description: "Try AXPress without restoring the physical icon. This is experimental and depends on the application. Leave off to restore briefly and hide again when its original controls close.", keywords: ["AXPress", "hidden", "popover"], section: "Original Controls", to: behavior)
         toggle("Position movable panels near the preview", key: .iconAbsorberPositionPanels, id: "iconAbsorber.positionPanels", description: "Best effort for accessible floating panels only. Native menus and protected or inaccessible surfaces appear in their normal position.", keywords: ["position", "move", "panel", "popover"], section: "Original Controls", to: behavior)
         action("Refresh Icon Pictures", id: "iconAbsorber.pictures", description: "Capture the original status icons from the menu-bar window. Requires optional Screen Recording permission; no other app windows are captured.", section: "Desktop Preview", to: behavior, enabled: { [weak self] in self?.module.capturing == false }) { [weak self] in self?.module.refreshPictures() }
-        action("Open Screen Recording Settings…", id: "iconAbsorber.screenPermission", description: "Open macOS privacy settings for optional original-icon capture. Wallpaper preview and application selection do not require screen capture.", section: "Desktop Preview", to: behavior) {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) }
-        }
         let compatibility = card("Compatibility")
         add(UI.caption("This module uses an unsupported macOS visibility API in an isolated service. It restores all items if that service fails or if Apple controls are present that the API cannot preserve. Original application menus are never recreated."), to: compatibility)
         add(UI.caption("Left-click uses Accessibility without synthesizing a global mouse click. Right-click uses an exposed menu action or an application-targeted event where supported. Some apps require their physical icon to be visible."), to: compatibility)
@@ -197,6 +196,9 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
         table.reloadData()
         if let focused, let index = rows.firstIndex(where: { $0.bundle == focused }) { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
         stateLabel.stringValue = module.state; detailLabel.stringValue = module.detail
+        applicationsMessage.stringValue = module.applicationListMessage ?? ""
+        applicationsMessage.isHidden = module.applicationListMessage == nil
+        applicationsMessage.textColor = context.permissions.accessibility ? .secondaryLabelColor : .systemOrange
         stateLabel.textColor = module.state == "Enabled" ? .systemGreen : .labelColor
         let originals = module.absorbedItems
         desktop.emptyText = selected.isEmpty ? "Choose applications below" : "Selected status items are unavailable"
@@ -208,7 +210,7 @@ final class IconAbsorberPageController: SettingsPageController, NSTableViewDataS
             self.module.activate(item, rightClick: right, anchor: CGPoint(x: rect.minX, y: primaryHeight - rect.minY + 8), visibleFrame: visible)
         }
         let missing = originals.filter { module.images[$0.id] == nil }.count
-        pictureLabel.stringValue = module.capturing ? "Capturing original status icons…" : (missing > 0 ? "\(missing) item(s) use application icons. Refresh Icon Pictures to capture their original status icons." : "Click an icon to open its original controls. Right-click for the original secondary action.")
+        pictureLabel.stringValue = module.capturing ? "Capturing original status icons…" : (originals.isEmpty ? "Select applications below to add their status items to the preview." : (missing > 0 ? "\(missing) item(s) use application icons. Refresh Icon Pictures to capture their original status icons." : "Click an icon to open its original controls. Right-click for the original secondary action."))
         updateWallpaper()
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }

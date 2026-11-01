@@ -24,14 +24,26 @@ import AppKit
             assert(window.contentViewController is NSSplitViewController)
             try snapshot(page.rawValue)
         }
-        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "permissions.assistant", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
+        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "general.openSystemSettings", "general.menuBarIcon", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
             assert(context.catalog.entries.contains { $0.id == id }, "Missing required searchable control: \(id)")
         }
         print("UI content frame: \(window.contentView!.frame); metadata entries: \(context.catalog.entries.count)")
         assert(window.contentView!.frame.width >= 780, "Settings must preserve its minimum usable width")
         assert(context.catalog.search("move threshold").contains { $0.id == "window.move.threshold" })
-        assert(context.catalog.search("nonfunctional").contains { $0.destination.page == .scripts })
+        assert(context.catalog.search("script preview").contains { $0.destination.page == .scripts })
         assert(context.catalog.search("menu bar").contains { $0.destination.page == .iconAbsorber })
+        assert(SettingsPage.allCases.map(\.title) == ["General", "Window Resizer", "Icon Absorber", "Reoccurring Scripts", "Logging", "About"])
+        assert(window.titlebarAccessoryViewControllers.isEmpty, "The redundant top status strip is removed")
+        context.navigate?(SearchDestination(page: .general, controlID: "")); settle()
+        let generalViews = views(window.contentView!)
+        let systemSettingsButtons = generalViews.compactMap { $0 as? NSButton }.filter { $0.title == "Open System Settings" }
+        assert(systemSettingsButtons.count == 1, "One System Settings entry point on General")
+        assert(!context.catalog.entries.contains { $0.id.hasPrefix("assistant.") || $0.id == "navigation.permissions" || $0.id == "navigation.status" })
+        assert(generalViews.contains { $0 is SystemAccessGuide }, "General includes the condensed fictional-account guide")
+        assert(!generalViews.compactMap { $0 as? NSTextField }.contains { ["BACKGROUND AGENT", "Permissions", "Diagnostics", "UI Stub", "UTILITIES", "APPLICATION"].contains($0.stringValue) })
+        assert(generalViews.compactMap { $0 as? NSSearchField }.first!.frame.height >= 30, "Sidebar Search matches the taller system control")
+        let mark = MenuBarController.makeIcon()
+        assert(mark.isTemplate && mark.size == NSSize(width: 20, height: 20), "Serif J adapts to the menu bar appearance")
         assert(context.catalog.search("not-a-setting-349138").isEmpty)
         context.navigate?(SearchDestination(page: .window, controlID: "window.move.threshold")); settle()
         if let field = views(window.contentView!).first(where: { $0.identifier?.rawValue == "window.move.threshold" }) as? NSTextField {

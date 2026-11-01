@@ -32,7 +32,9 @@ enum PreferenceKey: String, CaseIterable {
     case cursor = "windowResizer.changeCursor"
     case hints = "windowResizer.showCornerHints"
     case outline = "windowResizer.showWindowOutline"
+    case animatedEffects = "windowResizer.animatedEffects"
     case loginRequested = "general.launchAtLoginRequested"
+    case showMenuBarIcon = "general.showMenuBarIcon"
     case iconAbsorberEnabled = "iconAbsorber.enabled"
     case iconAbsorberHiddenPress = "iconAbsorber.hiddenPress"
     case iconAbsorberPositionPanels = "iconAbsorber.positionPanels"
@@ -41,7 +43,7 @@ enum PreferenceKey: String, CaseIterable {
         switch self {
         case .suspended, .outline, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress: return false
         case .iconAbsorberPositionPanels: return true
-        case .enabled, .resizeEnabled, .moveEnabled, .cursor, .hints: return true
+        case .enabled, .resizeEnabled, .moveEnabled, .cursor, .hints, .animatedEffects, .showMenuBarIcon: return true
         case .activation: return "immediate"
         case .resizeThreshold, .moveThreshold: return 5
         case .cornerSize: return 200
@@ -67,6 +69,7 @@ struct GesturePreferences: Equatable {
     var changeCursor = true
     var cornerHints = true
     var outline = false
+    var animatedEffects = true
     var anyGesture: Bool { enabled && (resizeEnabled || moveEnabled) }
 }
 
@@ -125,7 +128,7 @@ final class PreferenceStore {
         GesturePreferences(enabled: bool(.enabled), resizeEnabled: bool(.resizeEnabled), moveEnabled: bool(.moveEnabled),
             immediateResize: string(.activation) == "immediate", resizeThreshold: Double(int(.resizeThreshold)),
             moveThreshold: Double(int(.moveThreshold)), cornerSize: Double(int(.cornerSize)),
-            changeCursor: bool(.cursor), cornerHints: bool(.hints), outline: bool(.outline))
+            changeCursor: bool(.cursor), cornerHints: bool(.hints), outline: bool(.outline), animatedEffects: bool(.animatedEffects))
     }
     var needsAssistant: Bool { defaults.string(forKey: "onboarding.assistantDisposition") == "notStarted" }
     func finishAssistant(skipped: Bool) {

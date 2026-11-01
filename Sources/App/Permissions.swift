@@ -39,12 +39,6 @@ final class PermissionCoordinator {
         schedule()
         if changed && notify { NotificationCenter.default.post(name: .permissionsChanged, object: self) }
     }
-    func request() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        if trusted && accessibility && !eventPosting { _ = requestEventPosting() }
-        refresh()
-    }
     func openSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         if !NSWorkspace.shared.open(url), let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") {

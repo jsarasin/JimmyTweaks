@@ -1,6 +1,6 @@
 # Jimmy Tweaks
 
-A native macOS 27+ Swift/AppKit background utility for corner resizing, interior window moving, and selected menu bar applications. Icon Absorber is experimental on macOS 27. Reoccurring Scripts is deliberately a **NONFUNCTIONAL UI STUB**: sample URLs and fictional history only.
+A native macOS 27+ Swift/AppKit background utility for corner resizing, interior window moving, and selected menu bar applications. Icon Absorber is experimental on macOS 27. Reoccurring Scripts contains sample URLs and fictional history only; it does not execute scripts.
 
 The original product contract is in [SPEC.md](SPEC.md); the new module is documented in [Icon Absorber](Docs/IconAbsorber.md). The app has one Settings window, local UserDefaults, seven-day plain-text logs, and a small isolated assertion service used only by Icon Absorber.
 
@@ -19,12 +19,15 @@ The build script creates a locally ad-hoc signed application with Hardened Runti
 
 ## Use
 
-- Open the app to show Settings. Follow or skip the permission assistant. It can be reopened from Status or Permissions.
+- Open the app to show General. Its single **Open System Settings** button and compact illustration explain where to allow Jimmy Tweaks to control other applications. Access is checked automatically.
+- General also controls the optional serif **J** menu bar icon and Suspend All. The guide uses a fictional account and generated portrait; it never reads your account name or family photos.
 - Hold Command and right-drag within a corner area to resize. Corner areas default to 200 logical points (adjustable from 8 to 400). All four corners preserve the opposite corner where the target app accepts geometry changes. Immediate activation is the default.
-- Corner hints use a pulsing neon glow with 32-point arms and follow the macOS Appearance accent colour. Reduce Motion keeps the glow steady.
+- Animated effects use abstract iridescent corner energy while hovering/resizing, with a palette independent of the macOS accent colour, and blue mist while moving. Both respond to accepted window velocity and acceleration. Corner energy uses 96-point arms and reconstructs emission between widely spaced resize samples, keeping fast drags continuous. Mist is visible from its first frame, builds quickly, and fades to transparent at the window edges. Stationary, click-through overlays are reused per display, with full-display Metal views and native-resolution drawables. Fire persists in a stationary desktop heat field, so rapid direction changes do not crop its trail at a moving rectangular boundary. Emitter movement is swept analytically in one compute pass per frame. Mist retains its intentional fade at the target window edges.
+- Turn off **Animated effects** for steady corner marks and a simple moving outline. macOS **Reduce Motion** disables the checkbox, explains why, and uses static feedback without changing the saved preference. Hidden/static effects have no animation timer. If Metal is unavailable, static feedback is used automatically.
+- Overlays are ordered above the matched target window using public window metadata. When metadata is ambiguous, the previous floating overlay behavior is used. No target window is raised or activated.
 - Hold Command and left-drag inside the content area to move. The independent threshold defaults to 5 logical points.
 - Keep dragging outside the window or over other windows: the original target stays selected until release. Size and position limits do not cancel resizing; reverse direction to continue.
-- Release Command or the initiating button to finish. Escape attempts to restore the original frame.
+- Release the initiating button to finish moving/resizing. While Command remains held, the effect idles at the final accepted window frame without capturing input, writing window geometry, or retargeting on pointer movement. Releasing Command gradually turns it grey over about one-third of a second, then the grey smoke fades over one second. Switching between moving and resizing preserves the outgoing effect as smoke beneath the incoming animation. Fading smoke stays click-through, and moving the pointer through it clears a soft wake without intercepting input. Reduce Motion and disabled animations skip these transitions. Escape during a gesture attempts to restore the original frame. Suspension, disabled features, and session/permission loss still clear feedback immediately.
 - Close Settings to leave the agent running. Reopen the app from Applications to change settings. Suspend All persists between launches; Quit Jimmy Tweaks stops the process.
 
 The window gesture capture path uses Accessibility-authorized modifying event interception and click replay. Input Monitoring is not requested merely because an event tap exists. Optional Icon Absorber icon pictures capture only the native menu-bar window after Screen Recording access is granted. Wallpaper is loaded through NSWorkspace. The app does not record typed keys or fetch sample script URLs.
@@ -48,7 +51,7 @@ Window eligibility depends on public Accessibility attributes. Some apps constra
 | `Sources/IconAbsorber` | Independent discovery, visibility-service client, original-control invocation and optional icon capture |
 | `Helpers/IconAbsorberAgent` | Private assessment API adapter in a disposable process; no watchdog or login registration |
 | `Sources/App` | Lifecycle, permission polling, bounded engine recovery, compile-time login preference |
-| `Sources/Settings` | Native split view/sidebar, per-control search, utility pages, skippable assistant |
+| `Sources/Settings` | Six native pages, taller sidebar search, one General/System Settings entry point and a fictional-account guide |
 | `Tests` | Deterministic outcome tests, native UI smoke harness, isolated AX fixture, boundary checks |
 | `Scripts` | Local build, focused final checks, icon generation, signed distribution workflow |
 

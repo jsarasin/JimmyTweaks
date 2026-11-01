@@ -133,7 +133,6 @@ final class SettingsContext {
     let preview = ScriptsPreview()
     let catalog = SearchCatalog()
     var navigate: ((SearchDestination) -> Void)?
-    var showAssistant: ((Int?, String?) -> Void)?
     var confirm: ((String, String, @escaping () -> Void) -> Void)?
     var showMessage: ((String, String) -> Void)?
     var refresh: (() -> Void)?

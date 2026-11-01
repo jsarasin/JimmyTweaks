@@ -44,6 +44,21 @@ import AppKit
         client.onFailure = { _ in failures += 1 }
         client.apply(hidden: [monitor]) { result in if case .failure = result { completions += 1 } }
         check(completions == 1 && failures == 1 && !client.held, "Missing bundled helper reports one failure and leaves the host running")
+        var trusted = false
+        let discoveryPermissions = PermissionCoordinator(checkAccessibility: { trusted }, checkEventPosting: { true }, requestEventPosting: { true })
+        let scanCount = Locked(0)
+        let discovery = IconAbsorberController(preferences: PreferenceStore(defaults: MemoryDefaults()), permissions: discoveryPermissions, logger: logger, scanItems: {
+            scanCount.withValue { $0 += 1 }; return StatusItemSnapshot()
+        })
+        discovery.setPanelVisible(true)
+        check(discovery.applicationListMessage?.contains("Open System Settings") == true, "An empty list explains missing access even while absorption is off")
+        trusted = true; discoveryPermissions.refresh()
+        let deadline = Date().addingTimeInterval(2)
+        while scanCount.snapshot == 0 && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        check(scanCount.snapshot > 0 && !discovery.enabled && !discovery.isHolding, "Granting access starts discovery without enabling absorption")
+        trusted = false; discoveryPermissions.refresh()
+        check(discovery.items.isEmpty && discovery.applicationListMessage?.contains("Open System Settings") == true, "Revocation clears stale discoveries and restores guidance")
+        discovery.shutdown()
         client.stop(); module.shutdown()
         print("Icon Absorber: \(checks) selection, persistence, permission and service-isolation checks passed. No live hiding or private assertions used.")
     }

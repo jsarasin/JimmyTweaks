@@ -116,7 +116,10 @@ final class RuntimeCoordinator: NSObject {
         }
         engine.onFeedback = { [weak self, weak engine] state in
             guard let self = self, let engine = engine, self.engine === engine else { return }
-            if !self.preferences.bool(.suspended) && self.sessionActive && !self.engineStopping { self.feedback.show(state) }
+            if !self.preferences.bool(.suspended) && self.sessionActive && !self.engineStopping {
+                if !self.preferences.bool(.animatedEffects) && (state == nil || state?.dismissing == true) { self.feedback.clear() }
+                else { self.feedback.show(state) }
+            }
             else { self.feedback.clear() }
         }
         engine.onPermissionConcern = { [weak self] in self?.permissions.refresh() }

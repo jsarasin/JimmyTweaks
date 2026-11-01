@@ -11,7 +11,6 @@ private final class DetailHost: NSViewController {
 }
 
 private final class SidebarController: NSViewController, NSTableViewDelegate, NSTableViewDataSource, NSSearchFieldDelegate {
-    enum Row { case page(SettingsPage), group(String) }
     let search = NSSearchField()
     let table = NSTableView()
     let quit = ActionButton("Quit Jimmy Tweaks") { NSApp.terminate(nil) }
@@ -19,12 +18,14 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
     var onQuery: ((String) -> Void)?
     var onSearchCommand: ((String) -> Void)?
     private var debounce: DispatchWorkItem?
-    private let rows: [Row] = [.page(.status), .group("UTILITIES"), .page(.window), .page(.iconAbsorber), .page(.scripts), .group("APPLICATION"), .page(.general), .page(.permissions), .page(.logging), .page(.about)]
+    private let rows: [SettingsPage] = SettingsPage.allCases
     override func loadView() {
         view = NSView()
         let material = NSVisualEffectView(); material.material = .sidebar; material.blendingMode = .behindWindow; UI.pin(material, in: view)
         let content = UI.vertical([], spacing: 14); UI.pin(content, in: view, inset: 14)
-        search.placeholderString = "Search settings"; search.delegate = self
+        search.placeholderString = "Search"; search.delegate = self
+        search.controlSize = .large; search.font = .systemFont(ofSize: 14)
+        search.heightAnchor.constraint(equalToConstant: 30).isActive = true
         search.sendsSearchStringImmediately = false; search.sendsWholeSearchString = true
         search.target = self; search.action = #selector(submitSearch)
         search.identifier = NSUserInterfaceItemIdentifier("global.search"); search.setAccessibilityLabel("Search Settings")
@@ -36,15 +37,14 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
         let scroll = NSScrollView(); scroll.documentView = table; scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         content.addArrangedSubview(scroll); scroll.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
-        content.addArrangedSubview(UI.separator()); content.arrangedSubviews.last!.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         quit.setContentHuggingPriority(.defaultLow, for: .horizontal)
         content.addArrangedSubview(quit); quit.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         let footer = UI.caption("Jimmy Tweaks · Background Agent"); content.addArrangedSubview(footer)
         footer.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
-        select(.status)
+        select(.general)
     }
     func select(_ page: SettingsPage) {
-        if let row = rows.firstIndex(where: { if case .page(let item) = $0 { return item == page }; return false }) {
+        if let row = rows.firstIndex(of: page) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
@@ -63,28 +63,20 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
         return false
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
-    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { if case .page = rows[row] { return true }; return false }
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        switch rows[row] { case .group: return 26; case .page(.scripts): return 46; default: return 34 }
-    }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 36 }
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard rows.indices.contains(table.selectedRow), case .page(let page) = rows[table.selectedRow] else { return }
-        onNavigate?(page)
+        guard rows.indices.contains(table.selectedRow) else { return }
+        onNavigate?(rows[table.selectedRow])
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        switch rows[row] {
-        case .group(let name): let label = UI.caption(name); label.font = .systemFont(ofSize: 10, weight: .semibold); return label
-        case .page(let page):
-            let icon = NSImageView(image: NSImage(systemSymbolName: page.symbol, accessibilityDescription: page.title) ?? NSImage())
-            icon.contentTintColor = page == .status ? .controlAccentColor : .secondaryLabelColor
-            icon.widthAnchor.constraint(equalToConstant: 18).isActive = true; icon.heightAnchor.constraint(equalToConstant: 18).isActive = true
-            let title = UI.label(page.title, size: 13, weight: page == .status ? .semibold : .regular)
-            let names = UI.vertical([title], spacing: 1)
-            if page == .scripts { names.addArrangedSubview(UI.caption("UI Stub")) }
-            let cell = UI.horizontal([icon, names], spacing: 9)
-            cell.setAccessibilityLabel(page.title + (page == .scripts ? ", UI Stub" : ""))
-            cell.identifier = NSUserInterfaceItemIdentifier("navigation.\(page.rawValue)"); return cell
-        }
+        let page = rows[row]
+        let icon = NSImageView(image: NSImage(systemSymbolName: page.symbol, accessibilityDescription: page.title) ?? NSImage())
+        icon.contentTintColor = .secondaryLabelColor
+        icon.widthAnchor.constraint(equalToConstant: 18).isActive = true; icon.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        let title = UI.label(page.title, size: 13)
+        let cell = UI.horizontal([icon, title], spacing: 9)
+        cell.setAccessibilityLabel(page.title)
+        cell.identifier = NSUserInterfaceItemIdentifier("navigation.\(page.rawValue)"); return cell
     }
 }
 
@@ -155,14 +147,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let sidebar = SidebarController()
     private let host = DetailHost()
     private var pages: [SettingsPage: SettingsPageController] = [:]
-    private var currentPage: SettingsPage = .status
+    private var currentPage: SettingsPage = .general
     private var searching = false
     private var rememberedScroll = CGPoint.zero
     private var results: SearchResultsController!
-    private var assistant: PermissionAssistant?
-    private let suspend = ActionButton("Suspend All") {}
-    private let status = UI.caption("")
-    private let statusLink = ActionButton("Status") {}
     private var observers: [NSObjectProtocol] = []
 
     init(context: SettingsContext) {
@@ -176,7 +164,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         split.addSplitViewItem(side); split.addSplitViewItem(NSSplitViewItem(viewController: host))
         split.splitView.setPosition(235, ofDividerAt: 0)
         results = SearchResultsController(context: context)
-        buildPages(); buildChrome(); bind(); registerMetadata()
+        buildPages(); bind(); registerMetadata()
         window.contentMinSize = NSSize(width: 780, height: 560)
         window.setContentSize(NSSize(width: 960, height: 700))
         window.center(); window.setFrameAutosaveName("JimmyTweaks.Settings")
@@ -184,28 +172,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             window.setContentSize(NSSize(width: max(780, content.frame.width), height: max(560, content.frame.height)))
         }
         if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) { window.center() }
-        show(.status); refreshAll()
+        show(.general); refreshAll()
     }
     required init?(coder: NSCoder) { fatalError("Programmatic interface") }
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     private func buildPages() {
-        pages = [.status: StatusPageController(.status, context: context), .window: WindowPageController(.window, context: context),
-            .iconAbsorber: IconAbsorberPageController(.iconAbsorber, context: context),
-            .scripts: ScriptsPageController(.scripts, context: context), .general: GeneralPageController(.general, context: context),
-            .permissions: PermissionsPageController(.permissions, context: context), .logging: LoggingPageController(.logging, context: context),
-            .about: AboutPageController(.about, context: context)]
+        pages = [.general: GeneralPageController(.general, context: context), .window: WindowPageController(.window, context: context),
+            .iconAbsorber: IconAbsorberPageController(.iconAbsorber, context: context), .scripts: ScriptsPageController(.scripts, context: context),
+            .logging: LoggingPageController(.logging, context: context), .about: AboutPageController(.about, context: context)]
         for page in SettingsPage.allCases { _ = pages[page]?.view }
-    }
-    private func buildChrome() {
-        let accessory = NSTitlebarAccessoryViewController(); accessory.layoutAttribute = .bottom
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 960, height: 48)); accessory.view = view
-        suspend.setButtonType(.switch); suspend.font = .systemFont(ofSize: 13, weight: .semibold)
-        suspend.identifier = NSUserInterfaceItemIdentifier("global.suspendAll")
-        suspend.handler = { [weak self] in guard let self = self else { return }; self.context.preferences.set(self.suspend.state == .on, for: .suspended) }
-        statusLink.handler = { [weak self] in self?.sidebar.clearSearch(); self?.show(.status) }
-        statusLink.identifier = NSUserInterfaceItemIdentifier("global.statusShortcut")
-        let row = UI.horizontal([statusLink, status, NSView(), suspend]); UI.pin(row, in: view, inset: 10)
-        window?.addTitlebarAccessoryViewController(accessory)
     }
     private func bind() {
         sidebar.onNavigate = { [weak self] page in
@@ -217,7 +192,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         results.clear.handler = { [weak self] in self?.sidebar.clearSearch(); self?.window?.makeFirstResponder(self?.sidebar.search) }
         results.onOpen = { [weak self] destination in self?.navigate(destination) }
         context.navigate = { [weak self] in self?.navigate($0) }
-        context.showAssistant = { [weak self] step, focus in self?.showAssistant(step: step, focus: focus) }
         context.confirm = { [weak self] title, detail, completion in self?.confirm(title, detail: detail, completion: completion) }
         context.showMessage = { [weak self] title, detail in self?.message(title, detail: detail) }
         context.refresh = { [weak self] in self?.refreshAll() }
@@ -227,28 +201,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     private func registerMetadata() {
         for page in SettingsPage.allCases {
-            context.catalog.register(ControlMetadata(id: "navigation.\(page.rawValue)", label: page.title, description: page == .scripts ? "NONFUNCTIONAL UI STUB: sample script controls and fictional history only." : "Open the \(page.title) Settings page.", keywords: [page.rawValue], section: "", destination: SearchDestination(page: page, controlID: "")))
+            context.catalog.register(ControlMetadata(id: "navigation.\(page.rawValue)", label: page.title, description: page == .scripts ? "Sample script controls and fictional history. Nothing executes." : "Open the \(page.title) Settings page.", keywords: [page.rawValue], section: "", destination: SearchDestination(page: page, controlID: "")))
         }
         for (id, label, description) in [
             ("global.search", "Search Settings", "Find controls by feature, description, gesture, and keyword."),
             ("global.search.clear", "Clear Search", "Clear the query and restore the preceding Settings page."),
-            ("global.suspendAll", "Suspend All", "Persistently pause all functional background features without changing their individual preferences."),
-            ("global.quit", "Quit Jimmy Tweaks", "Stop the background application explicitly. Closing Settings does not quit it."),
-            ("global.statusShortcut", "Open Status", "Open the prominent background status overview.")
+            ("global.quit", "Quit Jimmy Tweaks", "Stop the background application explicitly. Closing Settings does not quit it.")
         ] {
-            context.catalog.register(ControlMetadata(id: id, label: label, description: description, keywords: ["global", "background", id == "global.suspendAll" ? "pause stop resume master" : ""], section: "Application", destination: SearchDestination(page: .status, controlID: id)))
+            context.catalog.register(ControlMetadata(id: id, label: label, description: description, keywords: ["global", "background", id == "global.suspendAll" ? "pause stop resume master" : ""], section: "Application", destination: SearchDestination(page: .general, controlID: id)))
         }
         for (scope, page, parent) in [("window", SettingsPage.window, "window.reset"), ("scripts", .scripts, "scripts.reset"), ("all", .general, "general.resetAll")] {
             for action in ["confirm", "cancel"] {
                 context.catalog.register(ControlMetadata(id: "reset.\(scope).\(action)", label: action == "confirm" ? "Confirm \(scope.capitalized) Reset" : "Cancel \(scope.capitalized) Reset", description: "Navigate to the reset action. Opening a result never confirms or executes a reset.", keywords: ["reset", "defaults", "cancel"], section: "Preferences", destination: SearchDestination(page: page, controlID: parent)))
             }
         }
-        PermissionAssistant.registerMetadata(in: context.catalog)
     }
     func present() {
         showWindow(nil); window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         context.permissions.refresh(); refreshAll(); updatePermissionVisibility()
-        if context.preferences.needsAssistant { showAssistant(step: 0, focus: nil) }
     }
     private func show(_ page: SettingsPage) {
         guard let controller = pages[page] else { return }
@@ -271,22 +241,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func navigate(_ destination: SearchDestination) {
         sidebar.clearSearch(); show(destination.page)
         if let sample = destination.sampleID { (pages[.scripts] as? ScriptsPageController)?.selectSample(sample) }
-        if let step = destination.assistantStep { showAssistant(step: step, focus: destination.controlID); return }
-        let globals: [String: NSView] = ["global.search": sidebar.search, "global.search.clear": sidebar.search,
-            "global.suspendAll": suspend, "global.quit": sidebar.quit, "global.statusShortcut": statusLink]
+        let globals: [String: NSView] = ["global.search": sidebar.search, "global.search.clear": sidebar.search, "global.quit": sidebar.quit]
         if let control = globals[destination.controlID] { window?.makeFirstResponder(control) }
         else { DispatchQueue.main.async { [weak self] in self?.pages[destination.page]?.focus(destination.controlID) } }
     }
     func refreshAll() {
-        suspend.state = context.preferences.bool(.suspended) ? .on : .off
-        status.stringValue = context.runtime.state.rawValue
-        status.textColor = context.runtime.state == .running ? .systemGreen : .secondaryLabelColor
         for page in pages.values { page.refreshValues() }
-    }
-    private func showAssistant(step: Int?, focus: String?) {
-        guard let window = window else { return }
-        if assistant == nil { assistant = PermissionAssistant(context: context) }
-        assistant?.present(on: window, requestedStep: step, focusID: focus)
     }
     private func confirm(_ title: String, detail: String, completion: @escaping () -> Void) {
         guard let window = window, window.attachedSheet == nil else { return }
@@ -301,13 +261,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     private func updatePermissionVisibility() {
         let visible = window?.isVisible == true && window?.isMiniaturized != true && !searching
-        context.permissions.setDetailed("permissions-page", visible: visible && currentPage == .permissions)
+        context.permissions.setDetailed("general-page", visible: visible && currentPage == .general)
         (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(visible && currentPage == .iconAbsorber)
     }
     func windowDidMiniaturize(_ notification: Notification) { updatePermissionVisibility() }
     func windowDidDeminiaturize(_ notification: Notification) { updatePermissionVisibility() }
     func windowWillClose(_ notification: Notification) {
-        context.permissions.setDetailed("permissions-page", visible: false)
+        context.permissions.setDetailed("general-page", visible: false)
         (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(false)
     }
 }

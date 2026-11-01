@@ -33,6 +33,11 @@ final class WindowGestureController: @unchecked Sendable {
     private var heldDrag: CGEvent?
     private var replayOnNextEvent = false
     private var target: WindowTarget?
+    private var acceptedFeedbackFrame: CGRect?
+    private var idleFeedback: GestureFeedback?
+    private var idleAfterMouseUp = false
+    private var lastPublishedFeedback: GestureFeedback?
+    private var commandReleasePending = false
     private var activeToken: UInt64 = 0
     private var pendingPoint: CGPoint?
     private var workerBusy = false
@@ -72,7 +77,7 @@ final class WindowGestureController: @unchecked Sendable {
                 self.invalidatePipeline()
             }
             if self.machine.phase == .idle { self.requestHover(force: true) }
-            else if let target = self.target { self.feedback(target.seed.frame, kind: target.seed.kind, active: self.machine.phase == .active) }
+            else if let target = self.target { self.feedback(self.acceptedFeedbackFrame ?? target.seed.frame, kind: target.seed.kind, active: self.machine.phase == .active, window: target.feedbackWindow) }
         }
     }
     func stop(discardPending: Bool, forceAfter: TimeInterval? = nil) {
@@ -155,6 +160,7 @@ final class WindowGestureController: @unchecked Sendable {
         lastPointer = event.location
         let flags = event.flags
         let currentModifiers = Modifiers(command: flags.contains(.maskCommand), extra: !flags.intersection([.maskShift, .maskAlternate, .maskControl]).isEmpty)
+        observeModifiers(currentModifiers)
         let input: GestureInput?
         switch type {
         case .leftMouseDown: input = .down(.left, event.location, currentModifiers)
@@ -163,7 +169,7 @@ final class WindowGestureController: @unchecked Sendable {
         case .rightMouseDragged: input = .drag(.right, event.location)
         case .leftMouseUp: input = .up(.left, event.location)
         case .rightMouseUp: input = .up(.right, event.location)
-        case .flagsChanged: modifiers = currentModifiers; input = .flags(currentModifiers)
+        case .flagsChanged: input = .flags(currentModifiers)
         case .keyDown:
             input = event.getIntegerValueField(.keyboardEventKeycode) == 53 ? .escapeDown : .interrupt
         case .keyUp:
@@ -182,6 +188,11 @@ final class WindowGestureController: @unchecked Sendable {
     }
 
     private func handle(_ input: GestureInput, event: CGEvent?, proxy: CGEventTapProxy?) -> GestureDecision {
+        switch input {
+        case .down(_, _, let flags), .flags(let flags): observeModifiers(flags)
+        default: break
+        }
+        if !modifiers.command { idleFeedback = nil; idleAfterMouseUp = false }
         let decision = machine.handle(input, preferences: preferences.snapshot,
                                       accepting: admission.snapshot && !finishing && !workerBusy)
         execute(decision, event: event, proxy: proxy)
@@ -215,10 +226,11 @@ final class WindowGestureController: @unchecked Sendable {
                 if machine.phase != .active { gate.close(); target = nil }
             case .resolve(let id, let point, let button): resolve(id: id, point: point, button: button)
             case .began(let kind):
+                idleFeedback = nil; idleAfterMouseUp = false
                 startedAt = ProcessInfo.processInfo.systemUptime
                 hoverGeneration &+= 1
                 logger.log("gesture", "begin", "\(kind.name); target=\(target?.bundleID ?? "unknown.application")")
-                if let target = target { feedback(target.seed.frame, kind: kind, active: true) }
+                if let target = target { feedback(target.seed.frame, kind: kind, active: true, window: target.feedbackWindow) }
             case .apply(let point): pendingPoint = point; pump()
             case .restore: restoreOriginal()
             case .end(let flush, let reason):
@@ -227,10 +239,16 @@ final class WindowGestureController: @unchecked Sendable {
                 startedAt = nil
                 if reason == "escape", restoring { continue }
                 if flush {
+                    idleAfterMouseUp = reason == "mouse-up" && modifiers.command && admission.snapshot
+                    if idleAfterMouseUp, let target {
+                        retainIdle(frame: acceptedFeedbackFrame ?? target.seed.frame, target: target)
+                    }
                     finishing = true
                     if pendingPoint == nil && !workerBusy { finishPipeline() } else { pump() }
                 } else { invalidatePipeline() }
-            case .hideFeedback: hoverGeneration &+= 1; publishFeedback(nil)
+            case .hideFeedback:
+                hoverGeneration &+= 1
+                if !publishIdleIfHeld() { idleAfterMouseUp = false; publishFeedback(nil) }
             }
         }
     }
@@ -244,7 +262,7 @@ final class WindowGestureController: @unchecked Sendable {
                 guard let self = self, self.machine.token == id, self.machine.phase == .resolving, self.gate.valid(id) else { return }
                 self.target = target
                 self.execute(self.machine.resolved(id: id, kind: target?.seed.kind), event: nil, proxy: nil)
-                if self.machine.phase == .pending, let target = target { self.feedback(target.seed.frame, kind: target.seed.kind, active: false) }
+                if self.machine.phase == .pending, let target = target { self.feedback(target.seed.frame, kind: target.seed.kind, active: false, window: target.feedbackWindow) }
             }
         }
         DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.075) { [weak self] in
@@ -286,7 +304,9 @@ final class WindowGestureController: @unchecked Sendable {
                 self.workerBusy = false
                 switch result {
                 case .success(let frame):
-                    if !self.finishing { self.feedback(frame, kind: target.seed.kind, active: true) }
+                    self.acceptedFeedbackFrame = frame
+                    if !self.finishing { self.feedback(frame, kind: target.seed.kind, active: true, window: target.feedbackWindow) }
+                    else if self.idleAfterMouseUp, self.modifiers.command { self.retainIdle(frame: frame, target: target) }
                 case .failure(let error):
                     if case .ax(let code) = error, code == .apiDisabled {
                         DispatchQueue.main.async { [weak self] in self?.onPermissionConcern?() }
@@ -320,14 +340,36 @@ final class WindowGestureController: @unchecked Sendable {
     }
     private func invalidatePipeline() {
         gate.close(); pendingPoint = nil; target = nil; finishing = false; restoring = false
-        hoverGeneration &+= 1; publishFeedback(nil)
+        idleFeedback = nil; idleAfterMouseUp = false
+        acceptedFeedbackFrame = nil; hoverGeneration &+= 1; publishFeedback(nil)
     }
-    private func finishPipeline() { gate.close(); target = nil; pendingPoint = nil; finishing = false; restoring = false; publishFeedback(nil) }
+    private func finishPipeline() {
+        gate.close(); target = nil; acceptedFeedbackFrame = nil; pendingPoint = nil; finishing = false; restoring = false
+        idleAfterMouseUp = false
+        if !publishIdleIfHeld() { publishFeedback(nil) }
+    }
+    private func retainIdle(frame: CGRect, target: WindowTarget) {
+        hoverGeneration &+= 1
+        idleFeedback = GestureFeedback(frame: frame, kind: target.seed.kind, active: false, preferences: preferences.snapshot, window: target.feedbackWindow, idle: true)
+        _ = publishIdleIfHeld()
+    }
+    /// Idle feedback owns no mouse events and performs no AX writes or hover retargeting.
+    private func publishIdleIfHeld() -> Bool {
+        let config = preferences.snapshot
+        guard let idle = idleFeedback, modifiers.command, admission.snapshot, config.enabled,
+              idle.kind == .move ? config.moveEnabled : config.resizeEnabled else {
+            idleFeedback = nil; return false
+        }
+        let refreshed = GestureFeedback(frame: idle.frame, kind: idle.kind, active: false, preferences: config, window: idle.window, idle: true)
+        idleFeedback = refreshed; publishFeedback(refreshed); return true
+    }
     private func requestHover(force: Bool) {
+        if publishIdleIfHeld() { return }
         guard machine.phase == .idle, !finishing, admission.snapshot, modifiers.qualifies else {
             if machine.phase == .idle { publishFeedback(nil) }; return
         }
         let config = preferences.snapshot
+        guard config.anyGesture else { publishFeedback(nil); return }
         guard config.changeCursor || config.cornerHints, !hoverBusy else { return }
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - lastHoverTime >= 0.05 else { return }
@@ -338,17 +380,33 @@ final class WindowGestureController: @unchecked Sendable {
             self?.perform { [weak self] in
                 guard let self = self else { return }; self.hoverBusy = false
                 guard generation == self.hoverGeneration, self.machine.phase == .idle,
-                      self.modifiers.qualifies, self.admission.snapshot else { return }
+                      self.modifiers.qualifies, self.admission.snapshot, self.idleFeedback == nil else { return }
                 if WindowGeometry.distance(pointer, self.lastPointer) > 8 { self.requestHover(force: true); return }
-                if let hit = hit { self.feedback(hit.seed.frame, kind: hit.seed.kind, active: false) }
+                if let hit = hit { self.feedback(hit.seed.frame, kind: hit.seed.kind, active: false, window: hit.feedbackWindow) }
                 else { self.publishFeedback(nil) }
             }
         }
     }
-    private func feedback(_ frame: CGRect, kind: GestureKind, active: Bool) {
-        publishFeedback(GestureFeedback(frame: frame, kind: kind, active: active, preferences: preferences.snapshot))
+    private func feedback(_ frame: CGRect, kind: GestureKind, active: Bool, window: FeedbackWindow? = nil) {
+        if !active, publishIdleIfHeld() { return }
+        acceptedFeedbackFrame = frame
+        publishFeedback(GestureFeedback(frame: frame, kind: kind, active: active, preferences: preferences.snapshot, window: window))
     }
-    private func publishFeedback(_ feedback: GestureFeedback?) { DispatchQueue.main.async { [weak self] in self?.onFeedback?(feedback) } }
+    private func observeModifiers(_ flags: Modifiers) {
+        if modifiers.command && !flags.command { commandReleasePending = true }
+        modifiers = flags
+    }
+    private func publishFeedback(_ feedback: GestureFeedback?) {
+        var next = feedback
+        if feedback == nil, commandReleasePending, let last = lastPublishedFeedback, admission.snapshot {
+            next = GestureFeedback(frame: last.frame, kind: last.kind, active: false, preferences: last.preferences,
+                window: last.window, dismissing: true)
+        }
+        commandReleasePending = false
+        lastPublishedFeedback = feedback
+        let published = next
+        DispatchQueue.main.async { [weak self] in self?.onFeedback?(published) }
+    }
     private func maybeStop() { if stopping.snapshot && !machine.ownsSequence && !replayOnNextEvent { tearDown() } }
     private func tearDown() { gate.close(); if let runLoop = loop.snapshot { CFRunLoopStop(runLoop) } }
 }
@@ -362,5 +420,8 @@ extension WindowGestureController {
     }
     var hasDeferredReplayForTesting: Bool { replayOnNextEvent && heldDown != nil }
     var ownsSequenceForTesting: Bool { machine.ownsSequence }
+    func hoverForTesting(at point: CGPoint, modifiers: Modifiers) {
+        lastPointer = point; self.modifiers = modifiers; requestHover(force: true)
+    }
 }
 #endif

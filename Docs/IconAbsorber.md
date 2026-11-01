@@ -130,10 +130,12 @@ Environment: Apple silicon, macOS 27.0.1 build 26A434, Swift 6.4/macOS 27 SDK.
 
 - Development, Release and Xcode Development builds completed, with signed helper.
   Development and Release bundles passed strict code-signature verification.
-- Existing 2,178 core checks, window-engine regressions, source boundary checks,
-  and the eight-page native Settings UI smoke test passed.
-- Fourteen focused module checks passed: identity filtering, ordering, persistence,
+- Existing 2,182 core checks, window-engine regressions, source boundary checks,
+  and the six-page native Settings UI smoke test passed after the Settings cleanup.
+- Seventeen focused module checks passed: identity filtering, ordering, persistence,
   reset boundaries, permission denial, Restore All and missing-helper isolation.
+  This includes automatic discovery after an access grant while absorption is off,
+  clearing stale discoveries after revocation, and explaining a permission-blocked list.
 - Real helper protocol checks passed for clear/EOF, malformed JSON, refusal to
   accept Apple bundle selections, and bounded input. These requests hid no apps.
 - A real client/service test passed for clear acknowledgement and the race between

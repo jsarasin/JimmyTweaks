@@ -1,58 +1,59 @@
 import AppKit
 
-final class StatusPageController: SettingsPageController {
+final class GeneralPageController: SettingsPageController {
     override func build() {
-        let stateCard = card("BACKGROUND AGENT")
-        let state = UI.label("", size: 23, weight: .semibold), detail = UI.caption("")
-        add(state, to: stateCard); add(detail, to: stateCard)
-        metadata(state, id: "status.windowState", label: "Window Resizer Status", description: "Current background utility state, configured intent, and any reason it cannot run.", keywords: ["running", "failed", "permission", "pause", "health"])
-        let background = UI.label("Jimmy Tweaks runs in the background. Closing Settings does not stop enabled features. To change settings, open Jimmy Tweaks again from Applications.")
-        add(background, to: stateCard)
-        metadata(background, id: "status.background", label: "Background Operation", description: background.stringValue, keywords: ["hidden", "close", "reopen", "Applications", "settings"])
-        let resume = action("Resume All", id: "global.resumeAll", description: "Turn off persistent master suspension without changing individual utility preferences.", keywords: ["unpause", "suspend"], to: stateCard) { [weak self] in self?.context.preferences.set(false, for: .suspended) }
-        let windows = card("Window Resizer")
-        let prefs = context.preferences
-        toggle("Enable Window Resizer", key: .enabled, id: "status.windowEnabled", description: "Command + right-drag at a corner resizes. Command + left-drag inside a window moves it.", keywords: ["resize", "move", "Command", "cmd"], section: "Window Resizer", to: windows)
-        let gestures = UI.caption(""); add(gestures, to: windows)
-        action("Window Resizer Settings…", id: "status.windowSettings", description: "Choose gesture activation, independent thresholds, corners, and feedback.", to: windows) { [weak self] in
-            self?.context.navigate?(SearchDestination(page: .window, controlID: "window.enabled"))
+        let access = card("")
+        let guide = SystemAccessGuide()
+        guide.heightAnchor.constraint(equalToConstant: 205).isActive = true
+        add(guide, to: access)
+        metadata(guide, id: "general.systemAccessGuide", label: "System Settings Guide", description: "A condensed example showing where to enable Jimmy Tweaks. The account and portrait are fictional.", keywords: ["permission", "accessibility", "device control", "data access"], section: "System Access")
+        add(UI.label("Enable Jimmy Tweaks in Device Control and Data Access to discover menu bar applications and control windows."), to: access)
+        let status = UI.caption(""); add(status, to: access)
+        metadata(status, id: "general.accessStatus", label: "System Access", description: "The application's current permission state, checked automatically.", keywords: ["permission", "accessibility", "access", "granted"], section: "System Access")
+        action("Open System Settings", id: "general.openSystemSettings", description: "Open the system privacy settings to allow Jimmy Tweaks to control other applications.", keywords: ["allow", "grant", "permission", "accessibility"], to: access) { [weak self] in self?.context.permissions.openSettings() }
+        refreshers.append { [weak self, weak status] in
+            guard let self else { return }
+            if !self.context.permissions.accessibility {
+                status?.stringValue = "Access is needed. Enable Jimmy Tweaks, then return here."
+                status?.textColor = .systemOrange
+            } else if !self.context.permissions.eventPosting {
+                status?.stringValue = "Access is granted. Waiting for macOS to make input control available."
+                status?.textColor = .secondaryLabelColor
+            } else {
+                status?.stringValue = "Permissions granted"
+                status?.textColor = .systemGreen
+            }
         }
-        let retry = action("Retry Window Engine", id: "status.retryWindowEngine", description: "Start a new bounded recovery attempt after a failed engine.", keywords: ["failure", "restart", "retry"], to: windows,
-                           enabled: { [weak self] in self?.context.runtime.state == .failed }) { [weak self] in self?.context.runtime.retry() }
-        let failedAt = UI.caption(""); add(failedAt, to: windows)
-        let icons = card("Icon Absorber")
-        let iconState = UI.caption(""); add(iconState, to: icons)
-        action("Icon Absorber Settings…", id: "status.iconAbsorber", description: "Select menu bar applications and open their original controls from a native desktop preview.", keywords: ["hide", "icons", "status bar"], to: icons) { [weak self] in self?.context.navigate?(SearchDestination(page: .iconAbsorber, controlID: "iconAbsorber.enabled")) }
-        refreshers.append { [weak self, weak iconState] in iconState?.stringValue = self.map { $0.context.iconAbsorber.state + " — " + $0.context.iconAbsorber.detail } ?? "" }
-        let permissions = card("Permissions")
-        let permissionState = UI.caption(""); add(permissionState, to: permissions)
-        action("Open Permission Assistant…", id: "status.openAssistant", description: "Run the guided, skippable setup assistant again.", keywords: ["setup", "grant", "accessibility", "onboarding"], to: permissions) { [weak self] in self?.context.showAssistant?(nil, nil) }
-        action("Review Permissions", id: "status.reviewPermissions", description: "Review current window-control and input capabilities.", to: permissions) { [weak self] in self?.context.navigate?(SearchDestination(page: .permissions, controlID: "permissions.accessibility.status")) }
-        let scripts = card("Reoccurring Scripts · UI Stub")
-        let stub = UI.caption("NONFUNCTIONAL UI STUB — examples only; nothing runs."); add(stub, to: scripts)
-        metadata(stub, id: "status.scriptsState", label: "Scripts Preview Status", description: stub.stringValue, keywords: ["recurring", "reoccurring", "nonfunctional", "example"])
-        action("Explore Scripts Preview", id: "status.scriptsSettings", description: "Open fictional script examples and sample history.", to: scripts) { [weak self] in self?.context.navigate?(SearchDestination(page: .scripts, controlID: "scripts.previewEnabled")) }
-        let logs = card("Diagnostics")
-        action("Open Log File", id: "status.openLog", description: "Open the current plain-text log in your default text application.", keywords: ["logfile", "error", "normal"], to: logs) { [weak self] in self?.context.openLog() }
-        let warning = UI.caption(""); warning.textColor = .systemOrange; add(warning, to: logs)
-        refreshers.append { [weak self, weak state, weak detail, weak resume, weak gestures, weak permissionState, weak failedAt, weak retry, weak warning] in
-            guard let self = self else { return }
-            let runtime = self.context.runtime
-            state?.stringValue = runtime.state.rawValue
-            state?.textColor = runtime.state == .running ? .systemGreen : (runtime.state == .failed ? .systemRed : .labelColor)
-            detail?.stringValue = runtime.detail
-            resume?.isHidden = !prefs.bool(.suspended)
-            gestures?.stringValue = "Resizing: \(prefs.bool(.resizeEnabled) ? "On" : "Off")    ·    Moving: \(prefs.bool(.moveEnabled) ? "On" : "Off")"
-            permissionState?.stringValue = self.context.permissions.summary
-            failedAt?.stringValue = runtime.lastFailure.map { "Last engine fault: " + DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .short) } ?? ""
-            failedAt?.isHidden = runtime.lastFailure == nil; retry?.isHidden = runtime.state != .failed
-            warning?.stringValue = self.context.preferences.newerSchema ? "These preferences came from a newer version. Unknown settings have been preserved." : (self.context.preferences.repairMessage ?? "")
-            warning?.isHidden = warning?.stringValue.isEmpty ?? true
+        let options = card("Preferences")
+        toggle("Show menu bar icon", key: .showMenuBarIcon, id: "general.menuBarIcon", description: "Show the serif J in the menu bar for quick access to Jimmy Tweaks.", keywords: ["menu", "icon", "status", "J"], section: "Preferences", to: options)
+        toggle("Suspend All", key: .suspended, id: "global.suspendAll", description: "Pause all enabled features and restore absorbed icons. Your individual settings are preserved.", keywords: ["pause", "resume", "stop", "master"], section: "Preferences", to: options)
+        add(UI.caption("Closing Settings keeps enabled features running. Reopen it from the menu bar icon or Applications."), to: options)
+        if context.login.available {
+            let login = ActionButton("Launch at login") {}; login.setButtonType(.switch)
+            login.handler = { [weak self, weak login] in self?.context.login.setEnabled(login?.state == .on) }
+            add(login, to: options)
+            metadata(login, id: "general.launchAtLogin", label: "Launch at Login", description: "Start the installed, signed application silently when you sign in.", keywords: ["startup", "login", "launch"], section: "Preferences", unavailable: "Install a Developer ID signed Release copy in Applications first.")
+            let explanation = UI.caption(""); add(explanation, to: options)
+            refreshers.append { [weak self, weak login, weak explanation] in
+                guard let self else { return }
+                login?.state = self.context.login.enabled ? .on : .off
+                login?.isEnabled = self.context.login.eligible; explanation?.stringValue = self.context.login.explanation
+            }
+        }
+        let reset = card("")
+        action("Reset All Preferences…", id: "general.resetAll", description: "Restore known preferences and script-preview defaults. System permission grants and logs are preserved.", keywords: ["reset", "defaults", "restore"], to: reset) { [weak self] in
+            self?.context.confirm?("Reset All Preferences?", "All feature settings return to their defaults. Suspend All turns off and Icon Absorber turns off. Permission grants and logs are preserved.") { [weak self] in
+                guard let self else { return }
+                self.context.runtime.endGestureForReset()
+                self.context.preferences.batch { self.context.login.reset(); self.context.preview.reset(); self.context.preferences.resetAll() }
+                self.context.refresh?()
+            }
         }
     }
 }
 
 final class WindowPageController: SettingsPageController {
+    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     override func build() {
         let prefs = context.preferences
         add(UI.caption("Live control of the window beneath your pointer, including inactive windows where macOS permits it."))
@@ -74,10 +75,24 @@ final class WindowPageController: SettingsPageController {
                enabled: { prefs.bool(.enabled) && prefs.bool(.moveEnabled) })
         let feedback = card("Cursor & Overlays")
         toggle("Change Cursor During Gestures", key: .cursor, id: "window.feedback.cursor", description: "Show a diagonal resize cursor or a hand when the pointer is over an eligible area. Other applications may replace the cursor.", keywords: ["pointer", "hand", "diagonal", "feedback"], section: "Cursor & Overlays", to: feedback)
-        toggle("Show Corner Hints", key: .hints, id: "window.feedback.cornerHints", description: "Show a glowing corner mark in your system accent colour while Command is held over an eligible resize corner. The glow pulses unless Reduce Motion is enabled.", keywords: ["overlay", "highlight", "corner", "hint", "neon", "glow", "accent", "colour"], section: "Cursor & Overlays", to: feedback)
+        toggle("Show Corner Hints", key: .hints, id: "window.feedback.cornerHints", description: "Mark eligible resize corners while Command is held and throughout resizing. Animated corners use their own iridescent colours; static markers use your system accent colour.", keywords: ["overlay", "highlight", "corner", "hint", "neon", "glow", "accent", "colour"], section: "Cursor & Overlays", to: feedback)
+        let animated = ActionButton("Animated effects") {}; animated.setButtonType(.switch)
+        animated.handler = { [weak animated] in prefs.set(animated?.state == .on, for: .animatedEffects) }
+        let motionNote = UI.caption("Disabled because Reduce Motion is enabled in System Settings.")
+        add(UI.horizontal([animated, motionNote]), to: feedback)
+        add(UI.caption("Iridescent corner energy and blue moving mist respond to window motion and dissolve into grey smoke on release or when switching gestures. Turn off for a steady corner marker and a simple moving outline."), to: feedback)
+        metadata(animated, id: "window.feedback.animatedEffects", label: "Animated Effects", description: "Animate iridescent resize energy, blue moving mist, and brief grey smoke transitions. Reduce Motion uses static visuals and preserves your saved preference.", keywords: ["fire", "flame", "fog", "mist", "neon", "animation", "reduce motion"], section: "Cursor & Overlays", unavailable: "Disabled because Reduce Motion is enabled in System Settings.")
+        let refreshMotion = { [weak self, weak animated, weak motionNote] in
+            let reduced = self?.reduceMotion() ?? true
+            animated?.isEnabled = !reduced
+            animated?.state = !reduced && prefs.bool(.animatedEffects) ? .on : .off
+            motionNote?.isHidden = !reduced
+        }
+        refreshers.append(refreshMotion)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(motionSettingsChanged), name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         toggle("Show Window Outline", key: .outline, id: "window.feedback.frame", description: "Outline the actual accepted window frame while resizing or moving.", keywords: ["overlay", "border", "frame", "outline"], section: "Cursor & Overlays", to: feedback)
         let behavior = card("Gesture Behavior")
-        add(UI.caption("Release Command or the mouse button to finish. Press Escape to try restoring the original frame. Windows may move partly off-screen, and inactive windows are not deliberately activated."), to: behavior)
+        add(UI.caption("Release the mouse button to finish moving or resizing. Keep Command held to leave the effect idling at the window; release Command to disperse animated effects in a quick grey smoke poof. Press Escape during a gesture to try restoring the original frame. Windows may move partly off-screen, and inactive windows are not deliberately activated."), to: behavior)
         add(UI.caption("The original window stays selected throughout a drag, even when the pointer leaves it or moves over another window. If macOS limits the window's size or position, keep dragging or reverse direction to continue."), to: behavior)
         add(UI.caption("Moving starts in the content interior, away from the edges and title bar. Threshold activation briefly delays ordinary Command-clicks; long-press timing and synthetic-input handling can vary by app. Control-click is not a right-button shortcut."), to: behavior)
         add(UI.caption("macOS and individual applications can constrain or reject window changes. Permission changes take effect automatically when possible. Closing Settings keeps enabled features running."), to: behavior)
@@ -85,64 +100,7 @@ final class WindowPageController: SettingsPageController {
             self?.context.confirm?("Reset Window Resizer?", "This restores resize, moving, and feedback defaults. An active gesture ends at its current frame. Suspend All and other application settings are preserved.") { [weak self] in self?.context.runtime.endGestureForReset(); self?.context.preferences.resetWindow() }
         }
     }
-}
-
-final class GeneralPageController: SettingsPageController {
-    override func build() {
-        let behavior = card("Background Operation")
-        add(UI.label("Close Settings to keep Jimmy Tweaks out of the way. Open the application again from Applications whenever you want to change settings."), to: behavior)
-        add(UI.caption("Suspend All persists across launches. Quitting stops the current process; it does not change any saved login preference."), to: behavior)
-        if context.login.available {
-            let login = card("Login")
-            let toggle = ActionButton("Launch Jimmy Tweaks at Login") {}; toggle.setButtonType(.switch)
-            toggle.handler = { [weak self, weak toggle] in self?.context.login.setEnabled(toggle?.state == .on) }
-            add(toggle, to: login)
-            metadata(toggle, id: "general.launchAtLogin", label: "Launch Jimmy Tweaks at Login", description: "Start the installed, signed app silently when you sign in. Master suspension remains in effect.", keywords: ["startup", "sign in", "login", "launch"], section: "Login", unavailable: "Install a Developer ID signed Release copy in Applications first.", value: { [weak self] in self?.context.login.enabled == true ? "Enabled by system" : "Off" })
-            let explanation = UI.caption(""); add(explanation, to: login)
-            action("Open Login Items Settings", id: "general.openLoginSettings", description: "Review the system's actual login registration and approvals.", to: login) { [weak self] in self?.context.login.openSettings() }
-            refreshers.append { [weak self, weak toggle, weak explanation] in
-                guard let self = self else { return }; toggle?.state = self.context.login.enabled ? .on : .off
-                toggle?.isEnabled = self.context.login.eligible; explanation?.stringValue = self.context.login.explanation
-            }
-        }
-        let reset = card("Preferences")
-        add(UI.caption("Changes take effect immediately. Resetting preferences does not revoke system permissions or delete logs."), to: reset)
-        action("Reset All Preferences…", id: "general.resetAll", description: "Restore known preferences and scripts preview defaults. This can resume enabled features when permissions are granted.", keywords: ["reset", "defaults", "restore", "all"], to: reset) { [weak self] in
-            self?.context.confirm?("Reset All Preferences?", "Window settings and the scripts preview return to their defaults. Suspend All turns off, so enabled features can resume immediately when permission is granted. Login startup is requested off. Permission grants, setup disposition, and logs are preserved.") { [weak self] in
-                guard let self = self else { return }
-                self.context.runtime.endGestureForReset()
-                self.context.preferences.batch { self.context.login.reset(); self.context.preview.reset(); self.context.preferences.resetAll() }
-                self.context.refresh?()
-            }
-        }
-    }
-}
-
-final class PermissionsPageController: SettingsPageController {
-    override func build() {
-        let access = card("Window Control")
-        let status = UI.label("", size: 17, weight: .semibold); add(status, to: access)
-        metadata(status, id: "permissions.accessibility.status", label: "Accessibility Permission", description: "Trust is required to change other applications' window positions and sizes.", keywords: ["grant", "trust", "control", "device control", "data access"], section: "Window Control")
-        add(UI.caption("Jimmy Tweaks uses Accessibility to control window geometry, invoke selected status items, and recognize window gestures. It does not record typed content. Icon Absorber can optionally capture status-icon pictures from the menu-bar window after you grant Screen Recording permission."), to: access)
-        action("Enable Accessibility…", id: "permissions.accessibility.request", description: "Ask macOS to let you grant window-control access. Approval remains your choice in System Settings.", keywords: ["allow", "permission", "trust"], to: access) { [weak self] in self?.context.permissions.request() }
-        action("Open System Settings", id: "permissions.accessibility.openSettings", description: "Open Privacy & Security to review Jimmy Tweaks' access.", to: access) { [weak self] in self?.context.permissions.openSettings() }
-        add(UI.caption("If the direct link does not reach the right category, open System Settings → Privacy & Security and find the category for controlling other applications. Its name varies by macOS version and language."), to: access)
-        let input = card("Input Capabilities")
-        let posting = UI.caption(""); add(posting, to: input)
-        metadata(posting, id: "permissions.inputControl.status", label: "Input Control", description: "Modifying input interception and safe click replay use the Accessibility-authorized control path.", keywords: ["tap", "event", "replay", "capture"], section: "Input Capabilities")
-        let monitoring = UI.caption("Input Monitoring: Not required for this capture path."); add(monitoring, to: input)
-        metadata(monitoring, id: "permissions.inputMonitoring.status", label: "Input Monitoring", description: monitoring.stringValue, keywords: ["listen", "monitoring", "keyboard", "permission"], section: "Input Capabilities")
-        add(UI.caption("Newly granted access is checked automatically, and enabled gestures start when macOS makes access available. Use Check Again to refresh access and retry the input engine."), to: input)
-        let assistant = card("Guided Setup")
-        action("Check Again", id: "permissions.checkAgain", description: "Re-read system permission state and retry the input engine without prompting.", keywords: ["refresh", "recheck"], to: assistant) { [weak self] in self?.context.runtime.retry(); self?.refreshValues() }
-        action("Open Permission Assistant…", id: "permissions.assistant", description: "Run the skippable guided permission setup again.", keywords: ["first run", "onboarding", "setup", "guide"], to: assistant) { [weak self] in self?.context.showAssistant?(nil, nil) }
-        refreshers.append { [weak self, weak status, weak posting] in
-            guard let self = self else { return }
-            status?.stringValue = self.context.permissions.accessibility ? "Accessibility: Granted" : "Accessibility: Not Granted"
-            status?.textColor = self.context.permissions.accessibility ? .systemGreen : .systemOrange
-            posting?.stringValue = self.context.permissions.eventPosting ? "Input control: Available" : "Input control: Not available yet"
-        }
-    }
+    @objc private func motionSettingsChanged() { refreshValues() }
 }
 
 final class LoggingPageController: SettingsPageController {

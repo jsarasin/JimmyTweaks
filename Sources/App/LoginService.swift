@@ -50,7 +50,6 @@ final class LoginService {
         guard eligible, SMAppService.mainApp.status != .notRegistered else { return }
         setEnabled(false)
     }
-    func openSettings() { SMAppService.openSystemSettingsLoginItems() }
     #else
     var available: Bool { false }
     var eligible: Bool { false }
@@ -58,6 +57,5 @@ final class LoginService {
     var explanation: String { "Open Jimmy Tweaks from Applications whenever you want to start it." }
     func setEnabled(_ enabled: Bool) {}
     func reset() {}
-    func openSettings() {}
     #endif
 }

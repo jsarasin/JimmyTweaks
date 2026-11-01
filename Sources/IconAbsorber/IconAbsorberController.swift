@@ -7,6 +7,7 @@ final class IconAbsorberController {
     private let logger: FileLogger
     private let service = IconAssertionClient()
     private let worker = DispatchQueue(label: "JimmyTweaks.iconAbsorber.accessibility", qos: .userInitiated)
+    private let scanItems: () -> StatusItemSnapshot
     private(set) var items: [AbsorbedStatusItem] = []
     private(set) var images: [String: NSImage] = [:]
     private(set) var state = "Disabled"
@@ -48,12 +49,12 @@ final class IconAbsorberController {
     private var stopped = false
     private var wasActive = false
 
-    init(preferences: PreferenceStore, permissions: PermissionCoordinator, logger: FileLogger) {
+    init(preferences: PreferenceStore, permissions: PermissionCoordinator, logger: FileLogger, scanItems: @escaping () -> StatusItemSnapshot = StatusItemAccess.scan) {
         self.preferences = preferences; self.permissions = permissions; self.logger = logger
+        self.scanItems = scanItems
         service.onFailure = { [weak self] message in self?.fail(message) }
-        for name in [Notification.Name.preferencesChanged, .permissionsChanged] {
-            observations.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.reconcile() })
-        }
+        observations.append(NotificationCenter.default.addObserver(forName: .preferencesChanged, object: preferences, queue: .main) { [weak self] _ in self?.reconcile() })
+        observations.append(NotificationCenter.default.addObserver(forName: .permissionsChanged, object: permissions, queue: .main) { [weak self] _ in self?.permissionsDidChange() })
         let workspace = NSWorkspace.shared
         runningObservation = workspace.observe(\.runningApplications, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { self?.applicationsChanged() }
@@ -76,6 +77,12 @@ final class IconAbsorberController {
     var canInvokeStatusItems: Bool { active && !capturing && snapshot.unsupportedSystemItems.isEmpty }
     func isAbsorbed(_ bundle: String) -> Bool { service.held && selectedBundles.contains(bundle) && !temporaryAllowed.contains(bundle) }
     var active: Bool { enabled && !preferences.bool(.suspended) && sessionActive && permissions.accessibility && failure == nil && !stopped }
+    var applicationListMessage: String? {
+        if !permissions.accessibility { return "Allow Jimmy Tweaks using General → Open System Settings to discover running menu bar applications." }
+        if scanInFlight || !scanned { return "Looking for running applications with menu bar items…" }
+        if items.isEmpty { return "No accessible menu bar applications found. Start an application such as MonitorControl, then choose Refresh." }
+        return nil
+    }
     func setPanelVisible(_ visible: Bool) {
         panelVisible = visible; permissions.setDetailed("icon-absorber", visible: visible)
         if visible { refresh() }; scheduleMaintenance()
@@ -98,6 +105,16 @@ final class IconAbsorberController {
         reconcile(force: true); scheduleScan()
     }
     private func changed() { NotificationCenter.default.post(name: .iconAbsorberChanged, object: self) }
+    private func permissionsDidChange() {
+        guard !stopped else { return }
+        if !permissions.accessibility {
+            scanRevision &+= 1; scanWork?.cancel(); scanInFlight = false; scanAgain = false; scanned = false
+            items = []; images = [:]; snapshot = StatusItemSnapshot(); itemObservations = []
+        }
+        reconcile(force: true)
+        if permissions.accessibility { scheduleScan() }
+        changed()
+    }
     private func setState(_ state: String, _ detail: String) {
         guard self.state != state || self.detail != detail else { return }
         self.state = state; self.detail = detail; changed()
@@ -150,8 +167,9 @@ final class IconAbsorberController {
     private func scan() {
         guard !scanInFlight, !stopped else { return }
         scanInFlight = true; scanRevision &+= 1; let revision = scanRevision
+        let scanItems = self.scanItems
         worker.async { [weak self] in
-            let result = StatusItemAccess.scan()
+            let result = scanItems()
             DispatchQueue.main.async {
                 guard let self, !self.stopped, self.scanRevision == revision else { return }
                 self.scanInFlight = false; self.scanned = true; self.snapshot = result

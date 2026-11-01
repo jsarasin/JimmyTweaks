@@ -1,27 +1,23 @@
 import Foundation
 
 enum SettingsPage: String, CaseIterable {
-    case status, window, iconAbsorber, scripts, general, permissions, logging, about
+    case general, window, iconAbsorber, scripts, logging, about
     var title: String {
         switch self {
-        case .status: return "Status"
         case .window: return "Window Resizer"
         case .iconAbsorber: return "Icon Absorber"
         case .scripts: return "Reoccurring Scripts"
         case .general: return "General"
-        case .permissions: return "Permissions"
         case .logging: return "Logging"
         case .about: return "About"
         }
     }
     var symbol: String {
         switch self {
-        case .status: return "waveform.path.ecg"
         case .window: return "arrow.up.left.and.arrow.down.right"
         case .iconAbsorber: return "menubar.rectangle"
         case .scripts: return "terminal"
         case .general: return "gearshape"
-        case .permissions: return "hand.raised"
         case .logging: return "doc.plaintext"
         case .about: return "info.circle"
         }
@@ -31,7 +27,6 @@ enum SettingsPage: String, CaseIterable {
 struct SearchDestination {
     var page: SettingsPage
     var controlID: String
-    var assistantStep: Int? = nil
     var sampleID: String? = nil
 }
 struct ControlMetadata {

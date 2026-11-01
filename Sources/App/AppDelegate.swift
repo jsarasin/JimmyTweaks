@@ -4,6 +4,7 @@ import CoreServices
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var context: SettingsContext?
     private var settings: SettingsWindowController?
+    private var menuBar: MenuBarController?
     private var quitting = false
     private var shutdownFinished = false
     func applicationWillFinishLaunching(_ notification: Notification) { createMenu() }
@@ -14,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let runtime = RuntimeCoordinator(preferences: preferences, permissions: permissions, logger: logger)
         let login = LoginService(preferences: preferences)
         context = SettingsContext(preferences: preferences, permissions: permissions, runtime: runtime, logger: logger, login: login)
+        menuBar = MenuBarController(preferences: preferences, openSettings: { [weak self] in self?.showSettings(nil) }, restoreIcons: { [weak self] in self?.context?.iconAbsorber.restoreAll() })
         let event = NSAppleEventManager.shared().currentAppleEvent
         let properties = event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))
         let loginLaunch = properties?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) || properties?.forKeyword(AEKeyword(keyAELaunchedAsLogInItem)) != nil
@@ -37,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if shutdownFinished || context == nil { return .terminateNow }
         guard !quitting else { return .terminateLater }; quitting = true
         guard let context = context else { return .terminateNow }
+        menuBar?.shutdown()
         context.iconAbsorber.shutdown()
         context.runtime.shutdown { [weak self] in
             context.logger.log("application", "shutdown", "Explicit application quit.")

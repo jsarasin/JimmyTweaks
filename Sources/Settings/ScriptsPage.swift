@@ -17,7 +17,7 @@ final class ScriptsPageController: SettingsPageController, NSTableViewDataSource
     private var updatingSelection = false
     private var model: ScriptsPreview { context.preview }
     override func build() {
-        let notice = card("NONFUNCTIONAL UI STUB")
+        let notice = card("Script Preview")
         add(UI.label("These are sample scripts and sample results. Nothing is downloaded, scheduled, or executed."), to: notice)
         previewToggle.setButtonType(.switch); add(previewToggle, to: notice)
         previewToggle.handler = { [weak self] in guard let self = self else { return }; self.model.enabled = self.previewToggle.state == .on; self.refreshValues() }
