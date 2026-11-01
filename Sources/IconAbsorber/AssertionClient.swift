@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 /// The UI process never loads private frameworks. Pipe EOF on a parent crash
 /// makes the assertion holder exit; its own death also drops the system assertion.
@@ -15,6 +16,10 @@ final class IconAssertionClient {
     private(set) var held = false
     private var ready = false
     private var queued: ([String], (Result<Bool, Error>) -> Void)?
+    #if TESTING
+    var executableForTesting: URL?
+    var processIDForTesting: pid_t? { process?.isRunning == true ? process?.processIdentifier : nil }
+    #endif
     enum Failure: LocalizedError {
         case message(String)
         var errorDescription: String? { if case .message(let message) = self { return message }; return nil }
@@ -36,16 +41,28 @@ final class IconAssertionClient {
         timeouts[id] = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
         do {
             var data = try JSONSerialization.data(withJSONObject: ["id": id, "hidden": hidden]); data.append(10)
-            try input?.write(contentsOf: data)
+            guard let input, data.count <= 65536 else { fail("Invalid visibility service request."); return }
+            let written = data.withUnsafeBytes { Darwin.write(input.fileDescriptor, $0.baseAddress, $0.count) }
+            guard written == data.count else { fail("The visibility service could not accept a request. All items have been released."); return }
         } catch { fail("The visibility service disconnected. All items have been released.") }
     }
     private func start() {
-        let url = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/IconAbsorberAgent")
+        var url = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/IconAbsorberAgent")
+        #if TESTING
+        url = executableForTesting ?? url
+        #endif
         guard FileManager.default.isExecutableFile(atPath: url.path) else { fail("The bundled Icon Absorber service is missing. Rebuild or reinstall Jimmy Tweaks."); return }
         let task = Process(), stdin = Pipe(), stdout = Pipe()
         task.executableURL = url; task.standardInput = stdin; task.standardOutput = stdout; task.standardError = FileHandle.nullDevice
         let token = UUID(); launchToken = token
         process = task; input = stdin.fileHandleForWriting; output = stdout.fileHandleForReading
+        let descriptor = stdin.fileHandleForWriting.fileDescriptor
+        // Private-service failure must neither SIGPIPE the host nor block its main
+        // thread. Partial/full pipes fail open instead of waiting on a stuck service.
+        guard fcntl(descriptor, F_SETNOSIGPIPE, 1) == 0,
+              fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK) == 0 else {
+            fail("Could not establish a safe visibility service connection."); return
+        }
         output?.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             DispatchQueue.main.async {

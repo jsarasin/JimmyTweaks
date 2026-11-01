@@ -1,11 +1,12 @@
 import Foundation
 
 enum SettingsPage: String, CaseIterable {
-    case status, window, scripts, general, permissions, logging, about
+    case status, window, iconAbsorber, scripts, general, permissions, logging, about
     var title: String {
         switch self {
         case .status: return "Status"
         case .window: return "Window Resizer"
+        case .iconAbsorber: return "Icon Absorber"
         case .scripts: return "Reoccurring Scripts"
         case .general: return "General"
         case .permissions: return "Permissions"
@@ -17,6 +18,7 @@ enum SettingsPage: String, CaseIterable {
         switch self {
         case .status: return "waveform.path.ecg"
         case .window: return "arrow.up.left.and.arrow.down.right"
+        case .iconAbsorber: return "menubar.rectangle"
         case .scripts: return "terminal"
         case .general: return "gearshape"
         case .permissions: return "hand.raised"

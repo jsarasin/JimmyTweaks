@@ -6,6 +6,7 @@ extension Notification.Name {
     static let runtimeChanged = Notification.Name("JimmyTweaks.runtimeChanged")
     static let permissionsChanged = Notification.Name("JimmyTweaks.permissionsChanged")
     static let loggingChanged = Notification.Name("JimmyTweaks.loggingChanged")
+    static let iconAbsorberChanged = Notification.Name("JimmyTweaks.iconAbsorberChanged")
 }
 
 final class Locked<Value>: @unchecked Sendable {
@@ -32,10 +33,14 @@ enum PreferenceKey: String, CaseIterable {
     case hints = "windowResizer.showCornerHints"
     case outline = "windowResizer.showWindowOutline"
     case loginRequested = "general.launchAtLoginRequested"
+    case iconAbsorberEnabled = "iconAbsorber.enabled"
+    case iconAbsorberHiddenPress = "iconAbsorber.hiddenPress"
+    case iconAbsorberPositionPanels = "iconAbsorber.positionPanels"
 
     var defaultValue: Any {
         switch self {
-        case .suspended, .outline, .loginRequested: return false
+        case .suspended, .outline, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress: return false
+        case .iconAbsorberPositionPanels: return true
         case .enabled, .resizeEnabled, .moveEnabled, .cursor, .hints: return true
         case .activation: return "immediate"
         case .resizeThreshold, .moveThreshold: return 5
@@ -129,8 +134,16 @@ final class PreferenceStore {
     }
     func resetWindow() { reset(keys: PreferenceKey.allCases.filter { $0.rawValue.hasPrefix("windowResizer.") }) }
     func resetAll() {
+        defaults.removeObject(forKey: "iconAbsorber.applications")
         reset(keys: PreferenceKey.allCases)
         defaults.removeObject(forKey: "NSWindow Frame JimmyTweaks.Settings")
+    }
+    var iconAbsorberSelection: IconAbsorberSelection {
+        get { IconAbsorberSelection(defaults.object(forKey: "iconAbsorber.applications") as? [String] ?? [], excluding: Bundle.main.bundleIdentifier ?? "local.jimmytweaks.app") }
+        set {
+            defaults.set(IconAbsorberSelection(newValue.bundles, excluding: Bundle.main.bundleIdentifier ?? "local.jimmytweaks.app").bundles, forKey: "iconAbsorber.applications")
+            changed()
+        }
     }
     private func reset(keys: [PreferenceKey]) {
         for key in keys { defaults.set(key.defaultValue, forKey: key.rawValue) }

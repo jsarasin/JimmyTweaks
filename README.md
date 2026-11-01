@@ -1,8 +1,8 @@
 # Jimmy Tweaks
 
-A native macOS 27+ Swift/AppKit background utility for corner resizing and interior window moving. Reoccurring Scripts is deliberately a **NONFUNCTIONAL UI STUB**: sample URLs and fictional history only.
+A native macOS 27+ Swift/AppKit background utility for corner resizing, interior window moving, and selected menu bar applications. Icon Absorber is experimental on macOS 27. Reoccurring Scripts is deliberately a **NONFUNCTIONAL UI STUB**: sample URLs and fictional history only.
 
-The complete product contract is in [SPEC.md](SPEC.md). The app has one executable, no bundled helper, one Settings window, local UserDefaults, and seven-day plain-text logs.
+The original product contract is in [SPEC.md](SPEC.md); the new module is documented in [Icon Absorber](Docs/IconAbsorber.md). The app has one Settings window, local UserDefaults, seven-day plain-text logs, and a small isolated assertion service used only by Icon Absorber.
 
 ## Build and open
 
@@ -27,7 +27,15 @@ The build script creates a locally ad-hoc signed application with Hardened Runti
 - Release Command or the initiating button to finish. Escape attempts to restore the original frame.
 - Close Settings to leave the agent running. Reopen the app from Applications to change settings. Suspend All persists between launches; Quit Jimmy Tweaks stops the process.
 
-The capture path uses Accessibility-authorized modifying event interception and click replay. Input Monitoring is not requested merely because an event tap exists. The app does not capture screen content, record typed keys, or fetch sample script URLs.
+The window gesture capture path uses Accessibility-authorized modifying event interception and click replay. Input Monitoring is not requested merely because an event tap exists. Optional Icon Absorber icon pictures capture only the native menu-bar window after Screen Recording access is granted. Wallpaper is loaded through NSWorkspace. The app does not record typed keys or fetch sample script URLs.
+
+## Icon Absorber
+
+Open **Icon Absorber** in Settings, select applications, then enable the module. Click an icon in the cropped desktop preview to open that application's original controls. Drag selected applications in the management list to change their order. **Restore All Now**, Suspend All, and quitting release the visibility restriction.
+
+Primary activation uses AXPress. By default the physical icon is restored temporarily and hidden again after the original controls close. The optional **Keep icons hidden when opening controls** mode tries AXPress without restoring it; application support is unverified. Native menus stay in their usual location; only accessible floating panels are candidates for repositioning. Right-click support varies by app.
+
+The private visibility API supports only certain Apple controls. If other system controls are detected, the module pauses and restores everything. Missing wallpaper assets and unavailable icon capture have explicit fallbacks. See the module document for compatibility and the remaining manual tests. Development proceeded after the user explicitly waived the original proof-of-concept gate; those unexecuted tests are not recorded as passed.
 
 Window eligibility depends on public Accessibility attributes. Some apps constrain frame size or position, reject synthesized click replay, change their own focus after geometry updates, or replace cursor feedback. Native full-screen and protected windows are excluded. Threshold activation delays ordinary Command-click delivery until activation is rejected; long-press behavior cannot be perfectly reproduced.
 
@@ -37,6 +45,8 @@ Window eligibility depends on public Accessibility attributes. Some apps constra
 | --- | --- |
 | `Sources/Core` | Geometry, pure gesture ownership reducer, typed preferences, search metadata, preview data, file logging |
 | `Sources/WindowEngine` | Session event tap, serial Accessibility operations, generation gates, optional nonactivating feedback |
+| `Sources/IconAbsorber` | Independent discovery, visibility-service client, original-control invocation and optional icon capture |
+| `Helpers/IconAbsorberAgent` | Private assessment API adapter in a disposable process; no watchdog or login registration |
 | `Sources/App` | Lifecycle, permission polling, bounded engine recovery, compile-time login preference |
 | `Sources/Settings` | Native split view/sidebar, per-control search, utility pages, skippable assistant |
 | `Tests` | Deterministic outcome tests, native UI smoke harness, isolated AX fixture, boundary checks |
@@ -50,6 +60,8 @@ When an asynchronous target lookup relinquishes a click, its bounded down/drag b
 
 ```sh
 ./Scripts/test.sh
+bash Scripts/test-icon-absorber.sh
+python3 Tests/IconAbsorberServiceTests.py "build/Development/Jimmy Tweaks.app/Contents/Helpers/IconAbsorberAgent"
 ```
 
 The tests use isolated in-memory preferences and a supplied scratch directory. They do not grant permissions or register login startup. `Tests/Fixtures/WindowFixture.swift` is optional test tooling for deliberate manual AX compatibility checks; it is not shipped inside the application. See `VALIDATION.md` for the actual checks completed on this machine and the remaining manual acceptance matrix. A passing build or deterministic test suite is not a claim that every third-party app has been tested.

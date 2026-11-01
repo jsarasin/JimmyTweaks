@@ -90,12 +90,13 @@ enum StatusItemAccess {
         let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         return entries.compactMap { entry in
             guard let id = entry[kCGWindowNumber as String] as? UInt32, let pid = entry[kCGWindowOwnerPID as String] as? Int32,
-                  let bounds = entry[kCGWindowBounds as String] as? CFDictionary, let rect = CGRect(dictionaryRepresentation: bounds) else { return nil }
+                  let bounds = entry[kCGWindowBounds as String] as? [String: Any], let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return nil }
             return Surface(id: id, pid: pid, frame: rect, layer: entry[kCGWindowLayer as String] as? Int ?? 0)
         }
     }
     /// Native floating panels only. Menus, protected surfaces and standard app windows stay put.
-    static func repositionFloatingPanel(pid: pid_t, excluding baseline: [AXUIElement], near point: CGPoint, within visibleFrame: CGRect) {
+    static func repositionFloatingPanel(pid: pid_t, excluding baseline: [AXUIElement], near point: CGPoint, within visibleFrame: CGRect, stillValid: () -> Bool) {
+        guard stillValid() else { return }
         let root = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(root, 0.25)
         let windows: [AXUIElement] = value(root, kAXWindowsAttribute) ?? []
         for window in windows where !baseline.contains(where: { CFEqual($0, window) }) {
@@ -108,6 +109,7 @@ enum StatusItemAccess {
             guard AXUIElementIsAttributeSettable(window, kAXPositionAttribute as CFString, &settable) == .success, settable.boolValue else { continue }
             var position = CGPoint(x: max(visibleFrame.minX, min(point.x, visibleFrame.maxX - rect.width)),
                                    y: max(visibleFrame.minY, min(point.y, visibleFrame.maxY - rect.height)))
+            guard stillValid() else { return }
             if let ax = AXValueCreate(.cgPoint, &position) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, ax) }
         }
     }

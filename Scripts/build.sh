@@ -17,8 +17,9 @@ if [[ "$CONFIGURATION" == "Release" ]]; then FLAGS=(-O -D RELEASE); fi
 xcrun swiftc -swift-version 5 -target arm64-apple-macosx27.0 -sdk "$(xcrun --show-sdk-path)" \
     -module-cache-path "$BUILD_ROOT/ModuleCache" -module-name JimmyTweaks \
     -framework AppKit -framework ApplicationServices -framework CoreGraphics -framework CoreServices \
-    -framework ServiceManagement -framework Security "${FLAGS[@]}" "${SOURCES[@]}" \
+    -framework ServiceManagement -framework Security -framework ScreenCaptureKit "${FLAGS[@]}" "${SOURCES[@]}" \
     -o "$APP_BUNDLE/Contents/MacOS/JimmyTweaks"
+bash "$PROJECT_ROOT/Scripts/build-icon-absorber-agent.sh" "$APP_BUNDLE/Contents/Helpers"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
 xcrun swift -module-cache-path "$BUILD_ROOT/ModuleCache" "$PROJECT_ROOT/Scripts/make-icon.swift" "$BUILD_ROOT/AppIcon.iconset"

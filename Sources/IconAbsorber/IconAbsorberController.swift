@@ -46,6 +46,7 @@ final class IconAbsorberController {
     private var invocationScreen = CGRect.zero
     private var clockMonitor: Any?
     private var stopped = false
+    private var wasActive = false
 
     init(preferences: PreferenceStore, permissions: PermissionCoordinator, logger: FileLogger) {
         self.preferences = preferences; self.permissions = permissions; self.logger = logger
@@ -72,6 +73,8 @@ final class IconAbsorberController {
     var selectedBundles: [String] { preferences.iconAbsorberSelection.bundles }
     var absorbedItems: [AbsorbedStatusItem] { selectedBundles.flatMap { bundle in items.filter { $0.bundle == bundle }.sorted { $0.index < $1.index } } }
     var isHolding: Bool { service.held }
+    var canInvokeStatusItems: Bool { active && !capturing && snapshot.unsupportedSystemItems.isEmpty }
+    func isAbsorbed(_ bundle: String) -> Bool { service.held && selectedBundles.contains(bundle) && !temporaryAllowed.contains(bundle) }
     var active: Bool { enabled && !preferences.bool(.suspended) && sessionActive && permissions.accessibility && failure == nil && !stopped }
     func setPanelVisible(_ visible: Bool) {
         panelVisible = visible; permissions.setDetailed("icon-absorber", visible: visible)
@@ -87,7 +90,7 @@ final class IconAbsorberController {
         preferences.iconAbsorberSelection = selection
     }
     func restoreAll() { preferences.set(false, for: .iconAbsorberEnabled) }
-    func retry() { failure = nil; pausedForInteraction = false; reconcile(force: true); refresh() }
+    func retry() { failure = nil; scanned = false; pausedForInteraction = false; reconcile(force: true); refresh() }
     func refresh() {
         guard !stopped else { return }
         if pausedForInteraction { pausedForInteraction = false }
@@ -104,6 +107,8 @@ final class IconAbsorberController {
         let signature = "\(enabled)/\(preferences.bool(.suspended))/\(sessionActive)/\(permissions.accessibility)/\(selectedBundles)/\(preferences.bool(.iconAbsorberHiddenPress))"
         guard force || signature != intent else { return }
         if !enabled { failure = nil }
+        if active && !wasActive { scanned = false }
+        wasActive = active
         intent = signature
         cancelInteraction(); lastHidden = nil; applyRevision &+= 1
         if !active {
@@ -130,6 +135,7 @@ final class IconAbsorberController {
     private func applicationsChanged() {
         guard panelVisible || enabled else { return }
         let running = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
+        for item in items where !running.contains(item.pid) { images.removeValue(forKey: item.id) }
         items.removeAll { !running.contains($0.pid) }
         if let interaction, !running.contains(interaction.pid) { cancelInteraction(); applyVisibility() }
         changed(); scheduleScan()
@@ -164,6 +170,7 @@ final class IconAbsorberController {
             StatusItemObservation(pid: pid, items: group) { [weak self] name, element in
                 guard let self else { return }
                 if name == kAXUIElementDestroyedNotification {
+                    for item in self.items where CFEqual(item.element, element) { self.images.removeValue(forKey: item.id) }
                     self.items.removeAll { CFEqual($0.element, element) }; self.changed()
                 }
                 if self.interaction?.pid == pid {
@@ -175,15 +182,15 @@ final class IconAbsorberController {
         }
     }
     private func applyVisibility(completion: ((Bool) -> Void)? = nil) {
-        guard active else { completion?(false); return }
-        if !snapshot.unsupportedSystemItems.isEmpty {
+        guard active, !capturing else { completion?(false); return }
+        guard !pausedForInteraction else { completion?(false); return }
+        let running = Set(items.map(\.bundle))
+        let hidden = Set(selectedBundles).intersection(running).subtracting(temporaryAllowed)
+        if !hidden.isEmpty && !snapshot.unsupportedSystemItems.isEmpty {
             applyRevision &+= 1; lastHidden = nil; service.stop(); stopClockMonitor()
             setState("Compatibility Pause", "All items are restored because this menu bar contains Apple controls the visibility API cannot preserve: " + snapshot.unsupportedSystemItems.joined(separator: ", ") + ".")
             completion?(false); return
         }
-        guard !pausedForInteraction else { completion?(false); return }
-        let running = Set(items.map(\.bundle))
-        let hidden = Set(selectedBundles).intersection(running).subtracting(temporaryAllowed)
         guard lastHidden != hidden || completion != nil else { return }
         lastHidden = hidden; applyRevision &+= 1; let revision = applyRevision
         if hidden.isEmpty, temporaryAllowed.isEmpty {
@@ -261,6 +268,12 @@ final class IconAbsorberController {
                     DispatchQueue.main.async {
                         guard revision == self.interactionRevision else { return }
                         guard let settled else { self.finishInteraction(); self.setState("Item Unavailable", "The original icon could not be located after restoration."); return }
+                        if clock, let centerPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first?.processIdentifier {
+                            let alreadyOpen = StatusItemAccess.surfaces().filter { $0.pid == centerPID && $0.frame.width > 200 && $0.frame.height > 30 }
+                            if !alreadyOpen.isEmpty {
+                                self.interactionBaseline.subtract(alreadyOpen.map(\.id)); self.sawSurface = true; self.pressReturned = true; self.startInteractionTimer(); return
+                            }
+                        }
                         invoke(settled)
                     }
                 }
@@ -293,8 +306,8 @@ final class IconAbsorberController {
         if open { sawSurface = true; quietTicks = 0 }
         else if pressReturned { quietTicks += 1 }
         if !clock, open, !panelPositioned, pressReturned, preferences.bool(.iconAbsorberPositionPanels), let anchor = invocationAnchor {
-            panelPositioned = true; let baseline = axWindowsBefore; let visible = invocationScreen
-            worker.async { StatusItemAccess.repositionFloatingPanel(pid: item.pid, excluding: baseline, near: anchor, within: visible) }
+            panelPositioned = true; let baseline = axWindowsBefore; let visible = invocationScreen; let gate = interactionGate
+            worker.async { StatusItemAccess.repositionFloatingPanel(pid: item.pid, excluding: baseline, near: anchor, within: visible, stillValid: { gate?.snapshot == true }) }
         }
         if !open, pressReturned, (sawSurface && quietTicks >= 2 || !sawSurface && Date().timeIntervalSince(interactionStarted) > 2) {
             let detected = sawSurface; finishInteraction()
@@ -332,10 +345,13 @@ final class IconAbsorberController {
             Thread.sleep(forTimeInterval: 0.35)
             let first = StatusItemAccess.scan(); Thread.sleep(forTimeInterval: 0.15); let second = StatusItemAccess.scan()
             DispatchQueue.main.async {
-                guard let self, !self.stopped, revision == self.interactionRevision else { return }
+                guard let self else { return }
+                guard !self.stopped, revision == self.interactionRevision else {
+                    self.capturing = false; self.applyVisibility(); self.changed(); return
+                }
                 let previous = Dictionary(first.items.map { ($0.id, $0.frame) }, uniquingKeysWith: { first, _ in first })
                 let stable = second.items.filter { previous[$0.id] == $0.frame && $0.frame != nil && self.selectedBundles.contains($0.bundle) }
-                StatusItemPictures.capture(stable) { [weak self] pictures in
+                StatusItemPictures.capture(stable, knownItems: second.items + second.systemItems) { [weak self] pictures in
                     guard let self else { return }; self.capturing = false
                     guard !self.stopped else { return }
                     self.images.merge(pictures, uniquingKeysWith: { _, new in new }); self.lastHidden = nil; self.applyVisibility(); self.changed()

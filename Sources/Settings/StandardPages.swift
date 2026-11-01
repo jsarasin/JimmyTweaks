@@ -20,6 +20,10 @@ final class StatusPageController: SettingsPageController {
         let retry = action("Retry Window Engine", id: "status.retryWindowEngine", description: "Start a new bounded recovery attempt after a failed engine.", keywords: ["failure", "restart", "retry"], to: windows,
                            enabled: { [weak self] in self?.context.runtime.state == .failed }) { [weak self] in self?.context.runtime.retry() }
         let failedAt = UI.caption(""); add(failedAt, to: windows)
+        let icons = card("Icon Absorber")
+        let iconState = UI.caption(""); add(iconState, to: icons)
+        action("Icon Absorber Settings…", id: "status.iconAbsorber", description: "Select menu bar applications and open their original controls from a native desktop preview.", keywords: ["hide", "icons", "status bar"], to: icons) { [weak self] in self?.context.navigate?(SearchDestination(page: .iconAbsorber, controlID: "iconAbsorber.enabled")) }
+        refreshers.append { [weak self, weak iconState] in iconState?.stringValue = self.map { $0.context.iconAbsorber.state + " — " + $0.context.iconAbsorber.detail } ?? "" }
         let permissions = card("Permissions")
         let permissionState = UI.caption(""); add(permissionState, to: permissions)
         action("Open Permission Assistant…", id: "status.openAssistant", description: "Run the guided, skippable setup assistant again.", keywords: ["setup", "grant", "accessibility", "onboarding"], to: permissions) { [weak self] in self?.context.showAssistant?(nil, nil) }
@@ -119,7 +123,7 @@ final class PermissionsPageController: SettingsPageController {
         let access = card("Window Control")
         let status = UI.label("", size: 17, weight: .semibold); add(status, to: access)
         metadata(status, id: "permissions.accessibility.status", label: "Accessibility Permission", description: "Trust is required to change other applications' window positions and sizes.", keywords: ["grant", "trust", "control", "device control", "data access"], section: "Window Control")
-        add(UI.caption("Jimmy Tweaks uses Accessibility to control window geometry and a modifying input tap to recognize and consume only its gestures. It does not record typed content or capture your screen."), to: access)
+        add(UI.caption("Jimmy Tweaks uses Accessibility to control window geometry, invoke selected status items, and recognize window gestures. It does not record typed content. Icon Absorber can optionally capture status-icon pictures from the menu-bar window after you grant Screen Recording permission."), to: access)
         action("Enable Accessibility…", id: "permissions.accessibility.request", description: "Ask macOS to let you grant window-control access. Approval remains your choice in System Settings.", keywords: ["allow", "permission", "trust"], to: access) { [weak self] in self?.context.permissions.request() }
         action("Open System Settings", id: "permissions.accessibility.openSettings", description: "Open Privacy & Security to review Jimmy Tweaks' access.", to: access) { [weak self] in self?.context.permissions.openSettings() }
         add(UI.caption("If the direct link does not reach the right category, open System Settings → Privacy & Security and find the category for controlling other applications. Its name varies by macOS version and language."), to: access)

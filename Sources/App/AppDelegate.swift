@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if shutdownFinished || context == nil { return .terminateNow }
         guard !quitting else { return .terminateLater }; quitting = true
         guard let context = context else { return .terminateNow }
+        context.iconAbsorber.shutdown()
         context.runtime.shutdown { [weak self] in
             context.logger.log("application", "shutdown", "Explicit application quit.")
             context.logger.shutdown {
@@ -50,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(appItem); appItem.submenu = appMenu
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ","); settings.target = self
         appMenu.addItem(settings); appMenu.addItem(.separator())
+        let restore = NSMenuItem(title: "Restore Absorbed Menu Bar Items", action: #selector(restoreIcons), keyEquivalent: "")
+        restore.target = self; appMenu.addItem(restore)
         appMenu.addItem(NSMenuItem(title: "Quit Jimmy Tweaks", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         let editItem = NSMenuItem(); main.addItem(editItem)
         let edit = NSMenu(title: "Edit"); editItem.submenu = edit
@@ -58,4 +61,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.mainMenu = main
     }
+    @objc private func restoreIcons() { context?.iconAbsorber.restoreAll() }
 }

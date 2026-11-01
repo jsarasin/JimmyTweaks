@@ -13,6 +13,7 @@ trap 'rm -rf "$STAGING"' EXIT
 APP="$STAGING/Jimmy Tweaks.app"
 ditto "${BUILD_ROOT:-$PROJECT_ROOT/build}/Release/Jimmy Tweaks.app" "$APP"
 xattr -cr "$APP"
+codesign --force --sign "$DEVELOPER_ID_APPLICATION" --options runtime --timestamp "$APP/Contents/Helpers/IconAbsorberAgent"
 codesign --force --sign "$DEVELOPER_ID_APPLICATION" --options runtime --timestamp \
     --entitlements "$PROJECT_ROOT/Resources/JimmyTweaks.entitlements" "$APP"
 codesign --verify --strict --verbose=2 "$APP"

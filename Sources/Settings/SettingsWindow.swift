@@ -19,7 +19,7 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
     var onQuery: ((String) -> Void)?
     var onSearchCommand: ((String) -> Void)?
     private var debounce: DispatchWorkItem?
-    private let rows: [Row] = [.page(.status), .group("UTILITIES"), .page(.window), .page(.scripts), .group("APPLICATION"), .page(.general), .page(.permissions), .page(.logging), .page(.about)]
+    private let rows: [Row] = [.page(.status), .group("UTILITIES"), .page(.window), .page(.iconAbsorber), .page(.scripts), .group("APPLICATION"), .page(.general), .page(.permissions), .page(.logging), .page(.about)]
     override func loadView() {
         view = NSView()
         let material = NSVisualEffectView(); material.material = .sidebar; material.blendingMode = .behindWindow; UI.pin(material, in: view)
@@ -190,6 +190,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     private func buildPages() {
         pages = [.status: StatusPageController(.status, context: context), .window: WindowPageController(.window, context: context),
+            .iconAbsorber: IconAbsorberPageController(.iconAbsorber, context: context),
             .scripts: ScriptsPageController(.scripts, context: context), .general: GeneralPageController(.general, context: context),
             .permissions: PermissionsPageController(.permissions, context: context), .logging: LoggingPageController(.logging, context: context),
             .about: AboutPageController(.about, context: context)]
@@ -220,7 +221,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         context.confirm = { [weak self] title, detail, completion in self?.confirm(title, detail: detail, completion: completion) }
         context.showMessage = { [weak self] title, detail in self?.message(title, detail: detail) }
         context.refresh = { [weak self] in self?.refreshAll() }
-        for name in [Notification.Name.preferencesChanged, .runtimeChanged, .permissionsChanged, .loggingChanged] {
+        for name in [Notification.Name.preferencesChanged, .runtimeChanged, .permissionsChanged, .loggingChanged, .iconAbsorberChanged] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refreshAll() })
         }
     }
@@ -298,6 +299,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let alert = NSAlert(); alert.messageText = title; alert.informativeText = detail; alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window, completionHandler: nil)
     }
-    private func updatePermissionVisibility() { context.permissions.setDetailed("permissions-page", visible: window?.isVisible == true && !searching && currentPage == .permissions) }
-    func windowWillClose(_ notification: Notification) { context.permissions.setDetailed("permissions-page", visible: false) }
+    private func updatePermissionVisibility() {
+        let visible = window?.isVisible == true && window?.isMiniaturized != true && !searching
+        context.permissions.setDetailed("permissions-page", visible: visible && currentPage == .permissions)
+        (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(visible && currentPage == .iconAbsorber)
+    }
+    func windowDidMiniaturize(_ notification: Notification) { updatePermissionVisibility() }
+    func windowDidDeminiaturize(_ notification: Notification) { updatePermissionVisibility() }
+    func windowWillClose(_ notification: Notification) {
+        context.permissions.setDetailed("permissions-page", visible: false)
+        (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(false)
+    }
 }

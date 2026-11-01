@@ -129,6 +129,7 @@ final class SettingsContext {
     let runtime: RuntimeCoordinator
     let logger: FileLogger
     let login: LoginService
+    let iconAbsorber: IconAbsorberController
     let preview = ScriptsPreview()
     let catalog = SearchCatalog()
     var navigate: ((SearchDestination) -> Void)?
@@ -138,6 +139,7 @@ final class SettingsContext {
     var refresh: (() -> Void)?
     init(preferences: PreferenceStore, permissions: PermissionCoordinator, runtime: RuntimeCoordinator, logger: FileLogger, login: LoginService) {
         self.preferences = preferences; self.permissions = permissions; self.runtime = runtime; self.logger = logger; self.login = login
+        iconAbsorber = IconAbsorberController(preferences: preferences, permissions: permissions, logger: logger)
     }
     func openLog() {
         logger.flush { [weak self] result in

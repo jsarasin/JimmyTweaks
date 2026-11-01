@@ -24,13 +24,14 @@ import AppKit
             assert(window.contentViewController is NSSplitViewController)
             try snapshot(page.rawValue)
         }
-        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "permissions.assistant", "logging.open"] {
+        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "permissions.assistant", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
             assert(context.catalog.entries.contains { $0.id == id }, "Missing required searchable control: \(id)")
         }
         print("UI content frame: \(window.contentView!.frame); metadata entries: \(context.catalog.entries.count)")
         assert(window.contentView!.frame.width >= 780, "Settings must preserve its minimum usable width")
         assert(context.catalog.search("move threshold").contains { $0.id == "window.move.threshold" })
         assert(context.catalog.search("nonfunctional").contains { $0.destination.page == .scripts })
+        assert(context.catalog.search("menu bar").contains { $0.destination.page == .iconAbsorber })
         assert(context.catalog.search("not-a-setting-349138").isEmpty)
         context.navigate?(SearchDestination(page: .window, controlID: "window.move.threshold")); settle()
         if let field = views(window.contentView!).first(where: { $0.identifier?.rawValue == "window.move.threshold" }) as? NSTextField {
@@ -113,7 +114,7 @@ import AppKit
         assert(runtime.state == .disabled, "Runtime still observes preferences after Settings closes")
         controller.showWindow(nil); settle()
         assert(window.isVisible, "Settings can reopen without recreating the agent")
-        print("Native UI smoke passed: seven AppKit pages, search/navigation, defaults, main-thread hit testing, and Settings close/reopen with a live runtime.")
+        print("Native UI smoke passed: \(SettingsPage.allCases.count) AppKit pages, search/navigation, defaults, main-thread hit testing, and Settings close/reopen with a live runtime.")
         window.orderOut(nil)
     }
 }

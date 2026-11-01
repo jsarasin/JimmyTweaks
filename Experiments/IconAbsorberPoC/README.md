@@ -2,6 +2,11 @@
 
 **Result: UNVERIFIED. Phase 2 and later are blocked.**
 
+Historical Phase 1 report: the user subsequently instructed us to assume the
+remaining behavior works and proceed with integration. That instruction superseded
+the development gate; it did not turn unexecuted tests into passing results. See
+[the integrated module's status and limitations](../../Docs/IconAbsorber.md).
+
 The native probe was built and launched on macOS 27.0.1, build 26A434,
 Apple silicon. The private framework and expected Objective-C method signatures
 are present. Initial discovery was blocked by missing privacy permissions.

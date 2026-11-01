@@ -5,18 +5,18 @@ static void reply(NSDictionary *message) {
     NSData *json = [NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
     if (!json) exit(2);
     @try {
-        [NSFileHandle.standardOutput writeData:json];
-        [NSFileHandle.standardOutput writeData:[@"\n" dataUsingEncoding:NSUTF8StringEncoding]];
+        [NSFileHandle.fileHandleWithStandardOutput writeData:json];
+        [NSFileHandle.fileHandleWithStandardOutput writeData:[@"\n" dataUsingEncoding:NSUTF8StringEncoding]];
     } @catch (NSException *exception) { exit(0); }
 }
 
 @interface Agent : NSObject
-@property AssessmentAdapter *adapter;
-@property NSMutableData *input;
-@property NSSet<NSString *> *hidden;
-@property NSSet<NSString *> *allowed;
-@property NSNumber *requestID;
-@property id observation;
+@property(nonatomic, strong) AssessmentAdapter *adapter;
+@property(nonatomic, strong) NSMutableData *input;
+@property(nonatomic, copy) NSSet<NSString *> *hidden;
+@property(nonatomic, copy) NSSet<NSString *> *allowed;
+@property(nonatomic, strong) NSNumber *requestID;
+@property(nonatomic) BOOL observingApplications;
 @end
 
 @implementation Agent
@@ -24,12 +24,12 @@ static void reply(NSDictionary *message) {
     if ((self = [super init])) {
         _adapter = [AssessmentAdapter new]; _input = [NSMutableData data];
         _hidden = [NSSet set]; _allowed = [NSSet set]; _requestID = @0;
+        // Agent apps do not always send launch notifications. Observe the actual
+        // process list so an unselected newcomer is admitted immediately.
+        [NSWorkspace.sharedWorkspace addObserver:self forKeyPath:@"runningApplications" options:NSKeyValueObservingOptionNew context:NULL];
+        _observingApplications = YES;
         __weak Agent *weakSelf = self;
-        // A new app must be admitted without waiting for the UI's next discovery pass.
-        _observation = [NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceDidLaunchApplicationNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
-            [weakSelf refreshForApplicationChange];
-        }];
-        [NSFileHandle.standardInput setReadabilityHandler:^(NSFileHandle *handle) {
+        [NSFileHandle.fileHandleWithStandardInput setReadabilityHandler:^(NSFileHandle *handle) {
             NSData *data = handle.availableData;
             dispatch_async(dispatch_get_main_queue(), ^{
                 Agent *owner = weakSelf;
@@ -49,9 +49,19 @@ static void reply(NSDictionary *message) {
 }
 - (void)refreshForApplicationChange {
     if (!_hidden.count) return;
-    NSMutableSet *newcomers = [[self runningBundles] mutableCopy];
+    NSSet *running = [self runningBundles];
+    NSMutableSet *newcomers = [running mutableCopy];
     [newcomers minusSet:_hidden]; [newcomers minusSet:_allowed];
-    if (newcomers.count) [self apply];
+    if (newcomers.count || ![running intersectsSet:_hidden]) [self apply];
+}
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    (void)object; (void)change; (void)context;
+    if ([keyPath isEqualToString:@"runningApplications"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self refreshForApplicationChange]; });
+    }
+}
+- (void)dealloc {
+    if (_observingApplications) [NSWorkspace.sharedWorkspace removeObserver:self forKeyPath:@"runningApplications"];
 }
 - (void)apply {
     NSSet *running = [self runningBundles];
