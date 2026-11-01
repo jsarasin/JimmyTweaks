@@ -70,7 +70,7 @@ final class WindowPageController: SettingsPageController {
                enabled: { prefs.bool(.enabled) && prefs.bool(.moveEnabled) })
         let feedback = card("Cursor & Overlays")
         toggle("Change Cursor During Gestures", key: .cursor, id: "window.feedback.cursor", description: "Show a diagonal resize cursor or a hand when the pointer is over an eligible area. Other applications may replace the cursor.", keywords: ["pointer", "hand", "diagonal", "feedback"], section: "Cursor & Overlays", to: feedback)
-        toggle("Show Corner Hints", key: .hints, id: "window.feedback.cornerHints", description: "Show a small corner mark while Command is held over an eligible resize corner.", keywords: ["overlay", "highlight", "corner", "hint"], section: "Cursor & Overlays", to: feedback)
+        toggle("Show Corner Hints", key: .hints, id: "window.feedback.cornerHints", description: "Show a glowing corner mark in your system accent colour while Command is held over an eligible resize corner. The glow pulses unless Reduce Motion is enabled.", keywords: ["overlay", "highlight", "corner", "hint", "neon", "glow", "accent", "colour"], section: "Cursor & Overlays", to: feedback)
         toggle("Show Window Outline", key: .outline, id: "window.feedback.frame", description: "Outline the actual accepted window frame while resizing or moving.", keywords: ["overlay", "border", "frame", "outline"], section: "Cursor & Overlays", to: feedback)
         let behavior = card("Gesture Behavior")
         add(UI.caption("Release Command or the mouse button to finish. Press Escape to try restoring the original frame. Windows may move partly off-screen, and inactive windows are not deliberately activated."), to: behavior)

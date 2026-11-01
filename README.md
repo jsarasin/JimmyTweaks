@@ -21,6 +21,7 @@ The build script creates a locally ad-hoc signed application with Hardened Runti
 
 - Open the app to show Settings. Follow or skip the permission assistant. It can be reopened from Status or Permissions.
 - Hold Command and right-drag within a corner area to resize. Corner areas default to 200 logical points (adjustable from 8 to 400). All four corners preserve the opposite corner where the target app accepts geometry changes. Immediate activation is the default.
+- Corner hints use a pulsing neon glow with 32-point arms and follow the macOS Appearance accent colour. Reduce Motion keeps the glow steady.
 - Hold Command and left-drag inside the content area to move. The independent threshold defaults to 5 logical points.
 - Keep dragging outside the window or over other windows: the original target stays selected until release. Size and position limits do not cancel resizing; reverse direction to continue.
 - Release Command or the initiating button to finish. Escape attempts to restore the original frame.

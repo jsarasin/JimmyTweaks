@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 struct GestureFeedback {
     let frame: CGRect
@@ -12,16 +13,87 @@ private final class FeedbackPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 private final class OutlineView: NSView {
-    var drawCorner: WindowCorner?
+    private var drawCorner: WindowCorner?
+    private var feedbackVisible = false
+    private let neon = CAShapeLayer()
+    private let core = CAShapeLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        for stroke in [neon, core] {
+            stroke.fillColor = nil
+            stroke.lineCap = .round; stroke.lineJoin = .round
+            layer?.addSublayer(stroke)
+        }
+        neon.lineWidth = 3
+        neon.shadowOffset = .zero; neon.shadowOpacity = 1; neon.shadowRadius = 8
+        core.lineWidth = 1.2
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshStyle), name: NSColor.systemColorsDidChangeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refreshStyle), name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        refreshStyle()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(corner: WindowCorner?, visible: Bool) {
+        drawCorner = corner; feedbackVisible = visible
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        neon.isHidden = corner == nil; core.isHidden = corner == nil
+        if let corner = corner {
+            // Keep the halo inside the window and retain the real corner on each display.
+            let x = corner.isLeft ? 10.0 : bounds.width - 10
+            let y = corner.isTop ? bounds.height - 10 : 10.0
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: x + (corner.isLeft ? 32 : -32), y: y))
+            path.addLine(to: CGPoint(x: x, y: y))
+            path.addLine(to: CGPoint(x: x, y: y + (corner.isTop ? -32 : 32)))
+            neon.path = path; core.path = path
+        }
+        CATransaction.commit()
+        refreshStyle(); needsDisplay = true
+    }
+
+    func stopAnimation() {
+        feedbackVisible = false
+        neon.removeAnimation(forKey: "neonPulse")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshStyle(); needsDisplay = true
+    }
+
+    @objc private func refreshStyle() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let accent = NSColor.controlAccentColor
+            neon.strokeColor = accent.cgColor; neon.shadowColor = accent.cgColor
+            core.strokeColor = (accent.blended(withFraction: 0.65, of: .white) ?? accent).cgColor
+        }
+        CATransaction.commit()
+        guard feedbackVisible, drawCorner != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            neon.removeAnimation(forKey: "neonPulse")
+            return
+        }
+        guard neon.animation(forKey: "neonPulse") == nil else { return }
+        let brightness = CABasicAnimation(keyPath: "opacity")
+        brightness.fromValue = 0.55; brightness.toValue = 1.0; brightness.duration = 1.1
+        let bloom = CABasicAnimation(keyPath: "shadowRadius")
+        bloom.fromValue = 5.0; bloom.toValue = 10.0; bloom.duration = 1.1
+        let pulse = CAAnimationGroup()
+        pulse.animations = [brightness, bloom]; pulse.duration = 1.1
+        pulse.autoreverses = true; pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        // All display fragments share a phase, even if a window crosses a screen edge.
+        pulse.beginTime = 1
+        neon.add(pulse, forKey: "neonPulse")
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        guard drawCorner == nil else { return }
         NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
         let path = NSBezierPath(); path.lineWidth = 2
-        if let corner = drawCorner {
-            let left = corner.isLeft, top = corner.isTop
-            let x = left ? 2.0 : bounds.width - 2, y = top ? bounds.height - 2 : 2.0
-            path.move(to: NSPoint(x: x + (left ? 16 : -16), y: y))
-            path.line(to: NSPoint(x: x, y: y)); path.line(to: NSPoint(x: x, y: y + (top ? -16 : 16)))
-        } else { path.appendRoundedRect(bounds.insetBy(dx: 1, dy: 1), xRadius: 5, yRadius: 5) }
+        path.appendRoundedRect(bounds.insetBy(dx: 1, dy: 1), xRadius: 5, yRadius: 5)
         path.stroke()
     }
 }
@@ -76,14 +148,18 @@ final class FeedbackController {
                 // Place full-frame drawing in a clipped per-screen content view; no artificial seam borders.
                 view.frame = NSRect(x: appKitFrame.minX - drawing.1.minX, y: appKitFrame.minY - drawing.1.minY,
                                     width: appKitFrame.width, height: appKitFrame.height)
-                view.drawCorner = corner; view.needsDisplay = true
+                view.configure(corner: corner, visible: true)
             }
             panel.orderFrontRegardless()
         }
-        for panel in panels.dropFirst(drawings.count) { panel.orderOut(nil) }
+        for panel in panels.dropFirst(drawings.count) { hide(panel) }
     }
     func clear() { hidePanels(); restoreCursor() }
-    private func hidePanels() { panels.forEach { $0.orderOut(nil) } }
+    private func hidePanels() { panels.forEach(hide) }
+    private func hide(_ panel: FeedbackPanel) {
+        (panel.contentView?.subviews.first as? OutlineView)?.stopAnimation()
+        panel.orderOut(nil)
+    }
     private func restoreCursor() { if cursorName != nil { NSCursor.arrow.set(); cursorName = nil } }
     private func diagonalCursor(flipped: Bool) -> NSCursor {
         let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
