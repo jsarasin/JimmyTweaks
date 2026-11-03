@@ -36,7 +36,7 @@ enum ShortcutTests {
         check(ShortcutConflictChecker.error(for: mouseShortcut, among: [], gestures: GesturePreferences()) == nil, "Transparent ordinary left click accepted")
         for code in UInt16(0)...1 {
             mouseShortcut.combination = ShortcutCombination(input: .mouse, code: code, modifiers: 1 << 20)
-            check(ShortcutConflictChecker.error(for: mouseShortcut, among: [], gestures: GesturePreferences())?.contains("Window Resizer") == true, "Internal gesture conflicts rejected")
+            check(ShortcutConflictChecker.error(for: mouseShortcut, among: [], gestures: GesturePreferences())?.contains("Window Move & Resize") == true, "Internal gesture conflicts rejected")
         }
         for mode in [ShortcutMode.transparent, .absorbing] {
             for activation in [ShortcutActivation.press, .release] {

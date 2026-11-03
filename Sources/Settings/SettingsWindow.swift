@@ -18,6 +18,8 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
     var onQuery: ((String) -> Void)?
     var onSearchCommand: ((String) -> Void)?
     private var debounce: DispatchWorkItem?
+    private var iconAppearance: ModuleIconAppearance?
+    private var appearanceTimer: Timer?
     private let rows: [SettingsPage] = SettingsPage.allCases
     override func loadView() {
         view = NSView()
@@ -31,6 +33,7 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
         search.identifier = NSUserInterfaceItemIdentifier("global.search"); search.setAccessibilityLabel("Search Settings")
         content.addArrangedSubview(search); search.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         table.headerView = nil; table.delegate = self; table.dataSource = self; table.backgroundColor = .clear
+        table.identifier = NSUserInterfaceItemIdentifier("settings.sidebar"); table.setAccessibilityLabel("Settings sections")
         table.style = .sourceList; table.intercellSpacing = NSSize(width: 0, height: 3)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("navigation")); table.addTableColumn(column)
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
@@ -42,6 +45,20 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
         let footer = UI.caption("Jimmy Tweaks · Background Agent"); content.addArrangedSubview(footer)
         footer.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         select(.general)
+        refreshIcons()
+    }
+    deinit { appearanceTimer?.invalidate() }
+    func setVisible(_ visible: Bool) {
+        guard visible else { appearanceTimer?.invalidate(); appearanceTimer = nil; return }
+        refreshIcons()
+        guard appearanceTimer == nil else { return }
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.refreshIcons() }
+        timer.tolerance = 0.2; RunLoop.main.add(timer, forMode: .common); appearanceTimer = timer
+    }
+    private func refreshIcons() {
+        let next = ModuleIconAppearance.current(appearance: view.effectiveAppearance)
+        guard next != iconAppearance else { return }
+        iconAppearance = next; table.reloadData()
     }
     func select(_ page: SettingsPage) {
         if let row = rows.firstIndex(of: page) {
@@ -71,16 +88,17 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
         return false
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 36 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { rows[row] == .general ? 36 : 26 }
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard rows.indices.contains(table.selectedRow) else { return }
         onNavigate?(rows[table.selectedRow])
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let page = rows[row]
-        let icon = NSImageView(image: NSImage(systemSymbolName: page.symbol, accessibilityDescription: page.title) ?? NSImage())
-        icon.contentTintColor = .secondaryLabelColor
-        icon.widthAnchor.constraint(equalToConstant: 18).isActive = true; icon.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        let style = iconAppearance ?? ModuleIconAppearance.resolve(theme: nil, systemDark: false)
+        let icon = NSImageView(image: ModuleIcons.image(for: page, appearance: style))
+        let size: CGFloat = page == .general ? 28 : 22
+        icon.widthAnchor.constraint(equalToConstant: size).isActive = true; icon.heightAnchor.constraint(equalToConstant: size).isActive = true
         let title = UI.label(page.title, size: 13)
         let cell = UI.horizontal([icon, title], spacing: 9)
         cell.setAccessibilityLabel(page.title)
@@ -186,6 +204,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     private func buildPages() {
         pages = [.permissions: PermissionsPageController(.permissions, context: context), .general: GeneralPageController(.general, context: context), .window: WindowPageController(.window, context: context),
+            .visualEffects: VisualEffectsPageController(.visualEffects, context: context),
             .iconAbsorber: IconAbsorberPageController(.iconAbsorber, context: context), .scripts: ScriptsPageController(.scripts, context: context),
             .shortcuts: CustomShortcutsPageController(.shortcuts, context: context),
             .logging: LoggingPageController(.logging, context: context), .about: AboutPageController(.about, context: context)]
@@ -219,7 +238,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ] {
             context.catalog.register(ControlMetadata(id: id, label: label, description: description, keywords: ["global", "background", id == "global.suspendAll" ? "pause stop resume master" : ""], section: "Application", destination: SearchDestination(page: .general, controlID: id)))
         }
-        for (scope, page, parent) in [("window", SettingsPage.window, "window.reset"), ("scripts", .scripts, "scripts.reset"), ("all", .general, "general.resetAll")] {
+        for (scope, page, parent) in [("window", SettingsPage.window, "window.reset"), ("scripts", .scripts, "scripts.reset")] {
             for action in ["confirm", "cancel"] {
                 context.catalog.register(ControlMetadata(id: "reset.\(scope).\(action)", label: action == "confirm" ? "Confirm \(scope.capitalized) Reset" : "Cancel \(scope.capitalized) Reset", description: "Navigate to the reset action. Opening a result never confirms or executes a reset.", keywords: ["reset", "defaults", "cancel"], section: "Preferences", destination: SearchDestination(page: page, controlID: parent)))
             }
@@ -269,6 +288,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         alert.beginSheetModal(for: window, completionHandler: nil)
     }
     private func updatePermissionVisibility() {
+        sidebar.setVisible(window?.isVisible == true && window?.isMiniaturized != true)
         let visible = window?.isVisible == true && window?.isMiniaturized != true && !searching
         context.permissions.setDetailed("permissions-page", visible: visible && currentPage == .permissions)
         (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(visible && currentPage == .iconAbsorber)
@@ -276,6 +296,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func windowDidMiniaturize(_ notification: Notification) { updatePermissionVisibility() }
     func windowDidDeminiaturize(_ notification: Notification) { updatePermissionVisibility() }
     func windowWillClose(_ notification: Notification) {
+        sidebar.setVisible(false)
         context.permissions.setDetailed("permissions-page", visible: false)
         (pages[.iconAbsorber] as? IconAbsorberPageController)?.setPreviewVisible(false)
     }

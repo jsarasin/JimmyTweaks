@@ -7,8 +7,10 @@ final class PermissionCoordinator {
     private(set) var inputMonitoring = false
     private(set) var screenRecording = false
     private var requestedListening = false
+    private var requestedStartupPermissions = false
     private var terminating = false
     var ready: Bool { accessibility && eventPosting }
+    var allGranted: Bool { ready && inputMonitoring && screenRecording }
     var summary: String {
         if !accessibility { return "Permission Required — allow Jimmy Tweaks to control windows." }
         if !eventPosting { return "Accessibility is granted. Waiting for macOS to make input control available; access is checked automatically." }
@@ -23,17 +25,25 @@ final class PermissionCoordinator {
     private let checkListening: () -> Bool
     private let requestListening: () -> Bool
     private let checkScreenRecording: () -> Bool
+    private let requestAccessibility: () -> Bool
+    private let requestScreenRecording: () -> Bool
     init(checkAccessibility: @escaping () -> Bool = { AXIsProcessTrusted() },
          checkEventPosting: @escaping () -> Bool = { CGPreflightPostEventAccess() },
          requestEventPosting: @escaping () -> Bool = { CGRequestPostEventAccess() },
          checkListening: @escaping () -> Bool = { CGPreflightListenEventAccess() },
          requestListening: @escaping () -> Bool = { CGRequestListenEventAccess() },
-         checkScreenRecording: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() }) {
+         checkScreenRecording: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
+         requestAccessibility: @escaping () -> Bool = {
+             AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+         },
+         requestScreenRecording: @escaping () -> Bool = { CGRequestScreenCaptureAccess() }) {
         self.checkAccessibility = checkAccessibility
         self.checkEventPosting = checkEventPosting
         self.requestEventPosting = requestEventPosting
         self.checkListening = checkListening; self.requestListening = requestListening
         self.checkScreenRecording = checkScreenRecording
+        self.requestAccessibility = requestAccessibility
+        self.requestScreenRecording = requestScreenRecording
         refresh()
     }
     deinit { timer?.invalidate() }
@@ -55,6 +65,17 @@ final class PermissionCoordinator {
         accessibility = ax; eventPosting = posting
         schedule()
         if changed && notify { NotificationCenter.default.post(name: .permissionsChanged, object: self) }
+    }
+    /// Request missing access once per launch. Status polling never repeats these
+    /// requests; macOS owns approval and may suppress prompts after a denial.
+    func requestStartupPermissions() {
+        guard !terminating, !requestedStartupPermissions else { return }
+        requestedStartupPermissions = true
+        refresh()
+        if !accessibility { _ = requestAccessibility() }
+        requestShortcutObservation()
+        if !screenRecording { _ = requestScreenRecording() }
+        refresh()
     }
     func requestShortcutObservation() {
         guard !terminating else { return }
@@ -83,11 +104,14 @@ final class PermissionCoordinator {
     func setBackgroundEligible(_ eligible: Bool) { backgroundEligible = eligible; schedule() }
     private var interval: TimeInterval? {
         guard !terminating else { return nil }
-        if !detailViewers.isEmpty { return 2 }
+        if !detailViewers.isEmpty { return allGranted ? 30 : 2 }
         guard backgroundEligible else { return nil }
         return ready ? 30 : 2
     }
     private var scheduledInterval: TimeInterval?
+    #if TESTING
+    var pollingIntervalForTesting: TimeInterval? { scheduledInterval }
+    #endif
     private func schedule() {
         guard scheduledInterval != interval else { return }
         timer?.invalidate(); timer = nil; scheduledInterval = interval

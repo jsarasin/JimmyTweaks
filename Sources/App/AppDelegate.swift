@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var context: SettingsContext?
     private var settings: SettingsWindowController?
     private var menuBar: MenuBarController?
+    private var staticEffects: StaticEffectsController?
     private var quitting = false
     private var shutdownFinished = false
     private var resetPermissionsOnQuit = false
@@ -31,7 +32,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if preferences.repairMessage != nil { logger.log("preferences", "repair", "Invalid stored values repaired or replaced with safe values.", severity: "WARN") }
         if preferences.newerSchema { logger.log("preferences", "newer-schema", "Unknown newer preferences preserved.", severity: "WARN") }
         runtime.reconcile()
+        staticEffects = StaticEffectsController(preferences: preferences)
         if !loginLaunch { showSettings(nil) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.quitting else { return }
+            self.context?.permissions.requestStartupPermissions()
+        }
     }
     @objc func showSettings(_ sender: Any?) {
         guard let context = context else { return }
@@ -46,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !quitting else { return .terminateLater }; quitting = true
         guard let context = context else { return .terminateNow }
         context.permissions.stopMonitoringForTermination()
+        staticEffects?.shutdown()
         menuBar?.shutdown()
         context.iconAbsorber.shutdown()
         context.runtime.shutdown { [weak self] result in

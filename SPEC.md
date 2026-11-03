@@ -48,7 +48,7 @@ These are ordinary concrete types/files within the application target, not indep
 | Application coordinator | Startup, reopen, one Settings window, explicit quit, lifecycle shutdown |
 | Preference store | Typed defaults, validation, schema migration, change delivery, resets |
 | Runtime coordinator | Effective enablement, suspension, utility health, bounded recovery |
-| Permission coordinator | Trust/capability checks, user-initiated requests, assistant progress |
+| Permission coordinator | Trust/capability checks, startup requests, automatic monitoring |
 | Window gesture controller | One event tap, gesture state, event ownership, physical-button tracking |
 | Accessibility window controller | Hit testing, target validation, frame reads/writes, geometry reconciliation |
 | Feedback controller | Optional cursor and nonactivating overlay lifetime |
@@ -70,8 +70,8 @@ Each gesture and each activation of the window engine has a generation identifie
 | First deliberate application open | Show Settings on Status and present the permission assistant as a sheet |
 | Later deliberate open while process is absent | Start eligible background features; show Settings on Status |
 | Reopen while already running | Bring the single existing Settings window forward, retaining its current page; create it on Status if closed |
-| Launch at login | Start silently, honor saved suspension and utility preferences, and show no assistant or permission prompts |
-| First-ever startup happens at login | Remain silent; defer first-run guidance until deliberate open |
+| Launch at login | Honor saved suspension and utility preferences; show no Settings or assistant; request missing system permissions once |
+| First-ever startup happens at login | Request missing system permissions; defer Settings guidance until deliberate open |
 | Close Settings or its final window | Keep the agent running, even if every utility is disabled or suspended |
 | Quit Jimmy Tweaks | Finish shutdown and terminate the application process |
 
@@ -103,7 +103,7 @@ Settings navigation, preference editing, permission guidance, log access, resets
 
 Represent configured intent separately from effective runtime state. A saved enabled preference is never changed merely because permission is missing or a start attempt fails.
 
-Window Resizer has one utility enable preference and separate Resize Windows and Move Windows switches. The event engine runs if the utility is enabled, at least one gesture is enabled, suspension is off, the user session is active, permissions are sufficient, and engine health permits it.
+Window Move & Resize has one utility enable preference and separate Resize Windows and Move Windows switches. The event engine runs if the utility is enabled, at least one gesture is enabled, suspension is off, the user session is active, permissions are sufficient, and engine health permits it.
 
 | Effective state | Meaning and action |
 | --- | --- |
@@ -130,13 +130,13 @@ The root content controller MUST be `NSSplitViewController`. The left sidebar MU
 
 Sidebar order:
 
-1. **Status** — pinned first and visually prominent.
-2. **Utilities** — nonselectable group label.
-3. **Window Resizer**.
-4. **Reoccurring Scripts** — visible “UI Stub” badge.
-5. **Application** — nonselectable group label.
-6. **General**.
-7. **Permissions**.
+1. **General**.
+2. **Permissions**.
+3. **Window Move & Resize**.
+4. **Visual Effects**.
+5. **Icon Absorber**.
+6. **Custom Shortcuts**.
+7. **Reoccurring Scripts**.
 8. **Logging**.
 9. **About**.
 
@@ -150,7 +150,7 @@ Display, in this order:
 
 - A large overall state summary and the current Suspend All state.
 - This explanatory copy: **“Jimmy Tweaks runs in the background. Closing Settings does not stop enabled features. To change settings, open Jimmy Tweaks again from Applications.”**
-- Window Resizer state, configured utility switch, individual resizing/moving states, and any blocking permission or failure.
+- Window Move & Resize state, configured utility switch, individual resizing/moving states, and any blocking permission or failure.
 - Reoccurring Scripts with **“NONFUNCTIONAL UI STUB — examples only; nothing runs.”** Do not give it a functional runtime switch here.
 - Permission summary with **Open Permission Assistant** and **Review Permissions** actions.
 - Failed-feature recovery actions, when applicable.
@@ -162,10 +162,11 @@ A fully running utility can still have one gesture disabled. Show “Running —
 
 | Page | Required content |
 | --- | --- |
-| Window Resizer | Utility switch; Resize Windows section; Window Moving section; feedback options; gesture explanations; current capability state; Reset Window Resizer |
+| Window Move & Resize | Utility switch; shared Activation Areas section; Resize Windows section; Window Moving section; cursor preference; gesture explanations; current capability state; Reset Window Move & Resize |
 | Reoccurring Scripts | Permanent stub banner; compact sample list; selected sample detail; UI-only controls; Sample Run History; Reset Scripts Preview |
-| General | Release-only Launch at Login preference; background/reopen explanation; Reset All Preferences |
-| Permissions | Current permission/capability states; why each is needed; Open System Settings; Check Again; Open Permission Assistant |
+| General | Menu bar icon, suspension, Release-only Launch at Login preference; background/reopen explanation |
+| Visual Effects | Framed Move/Resize and Static sections; gesture effect switches, styles, hints, outline, and animation; persistent screen-wide effect selector with fixed-height configuration area |
+| Permissions | Current permission/capability states; why each is needed; Open System Settings; automatic status checks; app-scoped permission reset for testing |
 | Logging | Fixed Normal logging and seven-day retention explanation; current file path; Open Log File; Reveal Logs Folder; I/O error state |
 | About | Jimmy Tweaks name, app version/build, minimum supported macOS, concise feature description, local-only operation statement |
 
@@ -186,7 +187,7 @@ Each entry contains:
 | Description | Plain-language explanation of effect, limits, or stub behavior |
 | Keywords | Synonyms, abbreviations, alternative spellings, gesture terms |
 | Destination | Page ID, section ID, and control/focus ID; presentation action for transient UI |
-| Breadcrumb | For example, Window Resizer › Window Moving › Drag Threshold |
+| Breadcrumb | For example, Window Move & Resize › Window Moving › Drag Threshold |
 | Availability | Enabled/disabled/conditional, with explanation; dynamically evaluated |
 | Value summary | Safe human-readable current value where meaningful |
 
@@ -218,11 +219,13 @@ The following IDs define the minimum catalog; §10 and §13 give their full beha
 | `navigation.{pageID}` | Every selectable sidebar destination |
 | `status.background`, `status.windowState`, `status.scriptsState` | Status / hidden, running, failed, examples |
 | `status.retryWindowEngine`, `status.openAssistant`, `status.reviewPermissions`, `status.openLog` | Status actions |
-| `window.enabled`, `window.resize.enabled`, `window.resize.activation`, `window.resize.threshold`, `window.resize.cornerSize` | Resizing / Command, cmd, right click, corner, immediate, small drag |
+| `window.enabled`, `window.resize.enabled`, `window.resize.activation`, `window.resize.threshold` | Resizing / Command, cmd, right click, corner, immediate, small drag |
+| `window.edgeZoneSize` | Shared activation areas / edge, corner size, boundary, resize, move, centre, points |
 | `window.move.enabled`, `window.move.threshold` | Moving / Command, left drag, interior, five points |
+| `window.resize.effectsEnabled`, `window.resize.effect`, `window.move.effectsEnabled`, `window.move.effect` | Independent visual effects / animation, style, lightning, energy, flame, mist, aurora, starlight |
 | `window.feedback.cursor`, `window.feedback.cornerHints`, `window.feedback.frame`, `window.reset` | Feedback / pointer, overlay, outline, reset |
-| `general.launchAtLogin`, `general.resetAll` | General / startup, sign in, defaults |
-| `permissions.{capability}.status`, `.request`, `.openSettings`, `permissions.checkAgain`, `permissions.assistant` | Permissions / access, trust, monitoring, setup |
+| `general.launchAtLogin` | General / startup, sign in |
+| `permissions.{capability}`, `permissions.{capability}.open`, `permissions.reset` | Permissions / access, trust, monitoring, setup |
 | `assistant.{stepID}.{actionID}` | Appropriate assistant step / back, next, skip, grant, check, finish |
 | `logging.status`, `logging.retention`, `logging.path`, `logging.open`, `logging.reveal` | Logging / normal, seven days, plain text, logfile |
 | `scripts.previewEnabled`, `.list`, `.add`, `.duplicate`, `.remove`, `.name`, `.url`, `.interval`, `.runPreview`, `.history`, `.clearHistory`, `.reset` | Scripts / recurring, reoccurring, schedule, URL, example, simulated |
@@ -232,17 +235,55 @@ The following IDs define the minimum catalog; §10 and §13 give their full beha
 
 Use `reoccurring` in the utility's visible name exactly as requested and index both “reoccurring” and “recurring.” Buttons duplicated across pages may have distinct control IDs but MUST bind to the same underlying action/preference.
 
+### Sidebar icons and status-item audio
+
+General keeps a 36-point row; all other Settings sidebar entries use 26 points, plus the table’s three-point spacing. Each entry uses distinct, playful code-native artwork. Render Standard, Dark, Clear light/dark, and Tinted light/dark variants with monochrome tinted motifs and readable translucent clear backgrounds. Read the observed `AppleIconAppearanceTheme`, `AppleIconAppearanceTintColor`, and custom tint value without changing system settings. These preference tokens are not a public AppKit styling contract: unknown/missing values fall back safely. Respect the style’s Light/Dark/Automatic axis. Recheck every two seconds only while Settings is visible and not minimized; regenerate rows only on a style/color change.
+
+General has Control volume from the menu bar icon, off by default and available when the icon is shown. When enabled and not suspended, physical wheel-up raises and wheel-down lowers the current default media output in four-percent steps; accumulate fine trackpad movement and ignore momentum. Middle-button release toggles mute. Ordinary menu clicks and other buttons pass through. No global input monitor or additional privacy grant is needed for these local status-item events. Resolve the default Core Audio output for every operation, preferring main controls and otherwise adjusting writable output channels while preserving their balance. Bound volume to zero through one. Use hardware mute when available, otherwise preserve/restores per-device gains for software mute. Report unsupported fixed-volume devices and failures in the tooltip and accessibility announcement. Use a serial worker; roll back already-written channels if a transaction fails. Queued actions must check enable/suspension/shutdown gates. Never alter the separate alert-sound output route.
+
+### Visual Effects panel
+
+Visual Effects is a separate Settings destination immediately after Window Move & Resize. Move/Resize contains the resize/move effect dropdowns, each starting with No Effect, plus Animated effects, Show Corner Hints, Show Window Outline, and an opt-in Show effects for normal window drags checkbox. Migrate a previously unchecked resize/move effect switch to that gesture's No Effect selection, then retire the switch key. The gesture panel retains activation, thresholds, enable switches, cursor behavior, and per-window reset. Keep the dropdowns editable while Animated effects or Reduce Motion temporarily prevents animation.
+
+With normal window drag effects enabled, observe unmodified left-button title-bar drags and edge resizes through the existing input tap without suppressing, replaying, or rewriting those mouse events. Read public Window Server bounds and order on a serial worker, with one metadata sample in flight and at most 30 samples per second while dragging. The first visible, eligible window under mouse-down remains the target. Show the selected move effect only after its origin changes, or the selected resize effect only after its size changes from an initial edge press. Do not trigger effects from ordinary content clicks, higher-level system surfaces, or frame changes without a matching active drag. Preserve the window's native movement and sizing; the observer performs no AX frame writes. Mouse-up stops observation and starts the existing effect departure. Turn this observer off by default; No Effect for both menus creates no passive observation work.
+
+Static provides a top-level effect dropdown (No Effect by default, Rain, Fireflies, Snow Storm) and a configuration region with a constant 220-point height, empty for No Effect. Selected effects expose their own saved controls. These effects continue across attached screens when Settings closes, with transparent, nonactivating overlays that ignore mouse events and are hidden from accessibility navigation. Put each full-screen Static effect field below the frontmost ordinary window on its display, updating the order when that window changes; window snowbank strips remain attached to their own windows. Suspend All, Reduce Motion, sleep, inactive sessions, and quit remove the overlays and particle work. Screen changes rebuild surfaces for the new display layout. No Effect creates no continuing overlays or animation work after any finite Fireplace departure finishes. Static effects do not require window gesture or screenshot permissions. Bound particle lifetimes and populations. Rain and Fireflies use Core Animation without an application animation timer; Snow Storm uses its own bounded 30 Hz formula/drawing clock only while selected. Previously saved Snowfall selections resolve to Snow Storm. Reset Window Move & Resize retains Static settings.
+
+#### Snow Storm
+
+Snow Storm is a long-running Static effect. Its three sliders are Snowfall intensity, Maximum flake size, and Wind gusts (coupled strength and frequency), with independently saved values. Emit a size distribution from the top of each attached display. Through the middle of Snowfall intensity's range, retain the existing gentle travel. Toward maximum, increase vertical travel to roughly four times the base rate and raise emission enough to offset shorter on-screen lifetimes. Apply the intensity multiplier to existing flakes immediately when the slider changes. Snowfall intensity must not alter horizontal gust timing, strength, or per-flake sway. Wind gusts alone controls horizontal bursts, upwind-edge snow emission, and occasional circular vortices near a display edge. Keep gust randomness independent of the flake-emission sequence. Update loose flakes once per frame with fixed travel formulas; there are no integrated forces, gravity/drag solver, impulses, full-body swept collisions, granular momentum, or physics subdivisions.
+
+Blend landed mass into a small height field per window or cursor support. Each window cell has a stable, window-specific cap formed from broad, local, and fine variations, with lower limits at the edges and no height over 24 logical points. Excess flakes continue falling once a cell and its neighbours are full. Cursor snow remains capped at 12 points. Spread new deposits over adjacent bins; leave stationary banks unchanged between landings. Window snow stays attached through ordinary dragging. A bounded lateral shift opposite a change in window speed moves only the existing height-field cells; mass that crosses the trailing edge becomes falling flakes. A quick directional reversal after a fast, short leg releases a small additional fraction of the bank. Do not remove a fraction on every fast movement sample. Treat a large geometry jump as relocation with its bank intact, rather than a shake. Cursor movement retains its existing speed-based shedding rule; sharp silhouette angles do not shed snow. Resize, closure, and overflow preserve mass accounting.
+
+A moving window's leading edge shifts intercepted falling snow's X coordinate to that edge, without changing its travel rate or adding a bounce. Briefly exempt freshly shed snow so it can stay behind the moving window. Each flake has a stable, independent 60-percent landing decision for each window: the remainder travels in front of that window and can land on a lower exposed top. Stationary window bodies do not block falling snow. Index only narrow top bands, rebuilding the index when window geometry changes; check the cursor silhouette directly.
+
+Read on-screen window bounds, owner, ID, level, and front-to-back order through public Window Server metadata on a serial worker, at most once per 30 Hz tick with one read in flight. Read cursor position without installing input capture. Sample the visible system cursor image and hotspot once when Snow Storm starts; find each column's topmost opaque pixel and use that Y as its landing surface, leaving transparent columns empty. Fall back to the approximate cursor shelf if no image is available. No window titles, contents, screenshots, or AX writes are needed. Each accumulation strip is nonactivating and click-through, ordered above its original window at that window's level so foreground windows occlude it. Reordering without movement updates stacking, while geometry-only changes do not reorder every bank. Detached snow retains foreground-window occlusion masks. The cursor's strip sits below the system cursor. Use rectangular window frames.
+
+Limit the model to 3,000 loose flakes, 48 windows, and 192 drift cells per support. Draw all loose snow into one full-screen surface per display, batching dots and large-flake arms into paths by depth and entrance opacity. Snowbanks use compact strips, with explicit redraw requests only when their shape or size changes. Render at 30 frames per second with bounded elapsed time and no catch-up subdivisions. Settings changes preserve the active model; switching away, suspension, Reduce Motion, sleep/session loss, display changes, and shutdown discard snow/overlays and stop the clock. Late window-query results cannot recreate a stopped effect.
+
+Place independent Decorations and Lights checkboxes horizontally beside Fireplace in the Snow Storm options row, both off by default. Decorations places a stable mix of miniature trees, presents, snowmen, and stick-figure carolers on up to twelve eligible window tops; Lights independently adds unevenly sagging green wire and old-style incandescent glass bulbs below the top edge of those windows, with occasional dark and briefly flickering bulbs. The checkboxes work on any date and keep artwork on each window's existing accumulation strip, preserving window movement, stacking, input transparency, and snow behavior. Christmas Eve alone starts repeating Santa visits naturally, even if both artwork checkboxes are off. Santa adds up to two chimneys, preferring roofs with open sky, flies behind windows with reindeer, lands near a chimney, walks over, and descends. Double-clicking only the Decorations text label starts one complete Santa visit on demand on any date without changing the Decorations checkbox or saving a new preference. After that visit ends, non-Eve skies return to their checkbox-controlled state; Christmas Eve resumes its automatic cycle. Use the existing full-screen snow surface and bounded strips without adding full-screen layers. Check the local date periodically only to start or stop natural Santa visits. Limit idle artwork redraws to six frames per second, with faster updates for the brief landing sequence.
+
+#### Snow Storm Fireplace
+
+Place a saved Fireplace checkbox beside the Snow Storm title within the fixed options area; default it off and hide it for other effects without losing the choice. Enabling sends staggered, rotating bricks from all four screen edges into a hearth in under 0.8 seconds. The masonry has two side walls and a lintel, with no bricks across the bottom. When Dock geometry is visible, leave enough height above it for the logs and fire while the fireplace remains behind the Dock. Draw a black firebox and a centred pile of large charred logs with glowing cracks spanning about 80% of the opening. Smooth, irregular flames rise from inside that pile, occupy a narrower central span, and release sparse embers. A bounded heat field (at most 224 by 80 cells) evolves and presents at up to 24 Hz using independently timed stochastic fuel pockets and turbulent transport. Interpolate its continuously coloured raster, with no visible pixel cells or repeating sinusoidal source bands.
+
+Sample visible Dock geometry at most every 0.125 seconds on the existing metadata worker. Start at about 130% of the current Dock's length, with a minimum 40-point end allowance for small Docks, and leave at least 16 points of clearance below the lintel where screen space permits. Expand when magnification or extra icons reach the opening's inner limits; retain the larger envelope through smaller/hidden samples until disabled. Reposition/rebuild for a different screen or Dock edge, clamp to the display, and orient side-Dock artwork inward. Before any visible Dock geometry is available, use a bottom-centred 640 by 136 logical point fallback, clamped for small screens.
+
+Use on-screen Dock-owner bounds and level, without titles, screenshots, or system preference changes. When an existing Accessibility grant permits it and the pointer is near the Dock, supplement those bounds with one targeted hit element's position/size for magnified icons; use a short timeout, no enumeration, no permission prompt, and retain metadata-only operation without a grant. Present the entire fire/brick/smoke overlay one level below the Dock and above ordinary windows. The Dock remains visible in front, while the nonactivating overlay ignores input and has no accessibility navigation entry.
+
+Disabling makes the current brick poses break apart and fade into an expanding grey puff through the existing procedural smoke renderer, with a native drawing fallback. Finish the departure within 1.4 seconds. Keep at most two puffs per controller and two retiring controllers during rapid effect switching. Active fireplaces borrow Snow Storm's clock; selecting another effect detaches only the finite departure onto a self-invalidating clock. Suspension, Reduce Motion, sleep/session loss, display changes, and shutdown remove all artwork and clocks immediately. Slider changes preserve the running fire and snow simulation.
+
 ## 6. Permission assistant and monitoring
 
 ### 6.1 Permission policy
 
-Accessibility trust is required for cross-application frame manipulation and the active filtering event tap. Check it without prompting at launch and during ordinary monitoring. Request system permission only following an explicit user action in the assistant or Permissions page.
+Accessibility trust is required for cross-application frame manipulation and the active filtering event tap. After startup initialization, request missing Accessibility, Input Monitoring, and Screen Recording access once per process launch using the native permission APIs. Skip existing grants. Ordinary monitoring checks status without repeating these startup requests. macOS controls approval and whether a previously denied request displays a prompt; users may need to enable the app in System Settings.
 
 Use a modifying session event tap rather than a passive global monitor because gesture ownership requires suppressing selected mouse events. Apple's documented security distinction assigns modifying event taps to Accessibility authorization and passive listening to Input Monitoring. **Do not blindly require both permissions.** See [Advances in macOS Security](https://developer.apple.com/videos/play/wwdc2019/701/).
 
-Show Input Monitoring as **Not required for this capture path** unless validation on a supported macOS version establishes that the selected public path additionally needs it. If it does, provide the corresponding user-initiated request/guidance and treat it as a real blocker. A failed tap alone is insufficient evidence that Input Monitoring is missing: distinguish trust, session availability, tap creation errors, and OS policy using documented capability checks. Do not fabricate a definitive diagnosis.
+Input Monitoring supports Transparent shortcuts and the global recorder; it is not an additional prerequisite for the window capture path. Already-granted Accessibility may also permit observation. A failed tap alone is insufficient evidence that Input Monitoring is missing: distinguish trust, session availability, tap creation errors, and OS policy using documented capability checks. Do not fabricate a definitive diagnosis.
 
-No permission is requested for the scripts stub. This release has no need to request screen capture, Apple Events automation of other apps, filesystem-wide access, or notifications. Receiving the application's own launch event is not automation of another application.
+Screen Recording supports Icon Absorber’s optional original menu-bar icon pictures; denial retains application-icon fallback and does not block window gestures. Requesting permission does not capture an image. No permission is requested for the scripts stub, Apple Events automation of other apps, filesystem-wide access, or notifications. Receiving the application's own launch event is not automation of another application.
 
 Use OS-visible permission category names appropriate to the supported version/localization. “Accessibility” in this document names the API capability; explanatory copy must not rely on one permanently fixed System Settings label or pane URL. System Settings deep links are best effort; always provide a textual Privacy & Security navigation fallback. Permission grants remain user actions in System Settings.
 
@@ -263,7 +304,7 @@ Do not store “granted” as a preference. Store only assistant version and com
 
 ### 6.3 Rechecks and revocation
 
-Recheck on application activation, return from System Settings, session resume, explicit Check Again, and relevant tap/Accessibility errors. Poll every two seconds while the assistant or Permissions page is visible, and every 30 seconds while the engine is eligible in the background. There is no background permission timer while all functional utilities are disabled or suspended; recheck before resume.
+Recheck on application activation, return from System Settings, session resume, and relevant tap/Accessibility errors. Poll every two seconds while Permissions is visible and any permission/capability is missing, slowing to 30 seconds once all are granted. Closing/minimizing Settings, searching, or navigating away ends detailed polling. In the background, check every 30 seconds while the input engine is eligible and ready, or every two seconds while core access is missing. There is no background permission timer while all functional utilities are disabled or suspended; recheck before resume. There is no manual Check Permissions Again button.
 
 On revocation, close the admission gate, end any current operation at the last frame, clear feedback, drain event ownership where possible, and display Permission Required. Do not display repeated alerts or repeatedly reopen System Settings. System-enforced tap shutdown may prevent perfect draining; the cleanup constraints in §9 apply.
 
@@ -273,7 +314,7 @@ On revocation, close the admission gate, end any current operation at the last f
 
 The target is the topmost eligible visible window **under the initial mouse-down point**, whether active or inactive. Do not substitute the frontmost application's window, a window behind an unrelated surface, or another window when the pointer leaves the target during dragging.
 
-Use `AXUIElementCopyElementAtPosition` and its owning-window relationship or a bounded parent walk, then validate the owning process and frame. Perform the initial system-wide hit test asynchronously on the main thread because a hit on our own process can synchronously invoke AppKit layout. Reject our own process before traversing attributes; resolve foreign elements and apply frame writes on the serial Accessibility worker. Bound ancestor traversal to 32 elements and detect cycles. Use the actual accessible window or independent sheet/panel element whose position and size are being changed, not an arbitrary child control. Cache hover results briefly, invalidate on relevant window/process/display changes, and revalidate at admission.
+Use `AXUIElementCopyElementAtPosition` and its owning-window relationship or a bounded parent walk, then validate the owning process and frame. Perform the initial system-wide hit test asynchronously on the main thread because a hit on our own process can synchronously invoke AppKit layout. Resolve ordinary Jimmy Tweaks windows through native NSWindow geometry on main, without AX self-writes. Resolve foreign elements and apply their frame writes on the serial Accessibility worker. Batch role/parent/window and frame-related Accessibility reads to reduce cross-process calls. Bound ancestor traversal to 32 elements and detect cycles. Use the actual accessible window or independent sheet/panel element whose position and size are being changed, not an arbitrary child control. Cache hover results briefly, invalidate on relevant window/process/display changes, and revalidate at admission.
 
 The scope includes standard windows, dialogs, sheets, and floating panels wherever public Accessibility attributes permit the requested operation. Eligibility is based on capabilities, not a standard-window-only whitelist:
 
@@ -282,21 +323,21 @@ The scope includes standard windows, dialogs, sheets, and floating panels wherev
 - Moving requires settable position and a readable size.
 - The element is visible, not minimized, not closing, and belongs to an available user application.
 - Skip native full-screen windows, system-protected surfaces, menus, tooltips, popovers without an independently manipulable window, and elements whose target identity cannot be established safely.
-- Skip Jimmy Tweaks' own Settings, assistant, alerts, and feedback windows to avoid stealing its controls.
+- Jimmy Tweaks’ ordinary titled windows support the same gestures, with native minimum/maximum sizing and anchored corners. Modal alerts, sheets, popovers, menus, full-screen windows, and effect surfaces remain excluded.
 
 Do not activate, focus, raise, or reorder the target. Do not use `AXRaise`, set focus/main-window attributes, or activate the owning application. Some apps may themselves activate in response to their own geometry changes; record this as an app compatibility limitation, not a reason to issue a compensating focus change.
 
-There are no application-specific exclusions or special adapters in this version. Unsupported windows pass through normally. A target's inability to resize does not prevent moving if moving requirements are satisfied.
+There are no foreign-application-specific exclusions or adapters. Unsupported windows pass through normally. A target's inability to resize does not prevent moving if moving requirements are satisfied.
 
-### 7.2 Corner and interior regions
+### 7.2 Shared edge and centre regions
 
-All measurements are logical screen points. Default resize corner size is **200 points**, adjustable from **8 to 400 points** in whole-point increments. A corner region is a square extending inward from the window's outer Accessibility frame. Intersect it with the window frame. Cursor points on the window frame's boundary are eligible within a 0.5-point numerical tolerance; points outside the frame are not included by expanding the region.
+All measurements are logical screen points. One shared **Edge Zone Size** setting defaults to **200 points**, adjustable from **8 to 400 points** in whole-point increments. Measure it inward from every edge of the window's outer Accessibility frame. The outer band, including its inner boundary, resizes; the remaining centre moves. A point belongs to exactly one region, with no gap or overlap. Cursor points on the outer frame boundary remain eligible within a 0.5-point numerical tolerance.
 
-Support top-left, top-right, bottom-left, and bottom-right. If corner squares overlap on a tiny window, choose the closest geometric corner; ties resolve top-left, top-right, bottom-left, bottom-right. Lock that corner when the gesture is admitted.
+Within the outer band, choose the closest geometric corner: top-left, top-right, bottom-left, or bottom-right. Ties resolve in that order. Lock that corner when the gesture is admitted. The band includes the middle of every edge. On shorter windows, automatically limit the band to preserve a usable moving centre. Let `s` be the shorter side and preserve `min(s / 2, max(96, min(200, s * 0.4)))` points of centre along that side; the effective inset is the smaller of the requested edge size and half the remaining side. One effective inset still serves both gestures, with no gaps or overlaps.
 
-Moving requires the pointer to be at least **12 points inside every edge** and below the title-bar area. Determine the content area's top boundary from trustworthy Accessibility content/title-bar geometry where available; otherwise conservatively exclude the top **32 points** of the outer frame. The interior is the remaining rectangle, including ordinary content controls. An empty interior is ineligible. Command + left-drag in this region intentionally takes precedence over a control's ordinary drag after activation. A plain click retains ordinary behavior subject to §9.
+Moving uses the same edge-size boundary, with no additional title-bar or content inset. Command + left-drag in the centre intentionally takes precedence over a control's ordinary drag after activation. A plain click retains ordinary behavior subject to §9.
 
-Right-button resize eligibility is limited to corner regions. Right clicks elsewhere and left clicks outside the moving interior pass through. These distinct mouse buttons prevent ambiguity where an interior point also lies within a large resize corner square.
+Right clicks outside the resize band and left clicks outside the moving centre pass through. Disabling either gesture does not change the shared boundary or assign its region to the other gesture. Unsupported windows retain normal input behavior.
 
 ### 7.3 Input modifiers and buttons
 
@@ -347,11 +388,11 @@ For each resize transaction:
 4. If the position write caused a further size change or the opposite anchor still differs, permit **one** additional corrective position write/readback. Do not iterate indefinitely.
 5. Publish the actual accepted frame to overlays and diagnostics. Do not draw an unconstrained desired frame as if it were applied.
 
-Separate AX position and size writes are not atomic; a transient intermediate frame may be visible. Steady-state anchor error on cooperative targets must be ≤1 point per axis after reconciliation. If macOS or the target constrains the accepted position or size, preserve the original target, corner, and pointer offset and keep the gesture active. Leaving the target window, crossing another window, or reaching a size/position limit MUST NOT end the gesture. Continue submitting geometry from the initial frame so reversing direction resumes control. Do not force the app to adopt unsupported geometry. Actual AX errors, target destruction, and explicit cancellation still end the gesture.
+Separate AX position and size writes are not atomic; a transient intermediate frame may be visible. Steady-state anchor error on cooperative targets must be ≤1 point per axis after reconciliation. If macOS or the target constrains the accepted position or size, preserve the original target, corner, and pointer offset and keep the gesture active. Leaving the target window, crossing another window, or reaching a size/position limit MUST NOT end the gesture. Continue submitting geometry from the initial frame so reversing direction resumes control. Do not force the app to adopt unsupported geometry. Unrecovered AX errors, target destruction, and explicit cancellation still end the gesture.
 
-On an AX timeout/invalid-element error, end the gesture and stop writes to that target. On a successful write that returns unchanged geometry at a minimum/maximum boundary, do not treat it as a fault; continue accepting pointer movement so reversing direction can resize again. Compute future requests from the initial frame, not by accumulating rounded accepted deltas.
+On a transient AX cannot-complete response during an active update, allow one bounded recovery attempt on the same target. First reread the actual frame, then reconcile the original absolute request; a timed-out setter may already have taken effect. Invalid elements, permission denial, unsupported operations, or exhausted recovery end the gesture and stop writes to that target. On a successful write that returns unchanged geometry at a minimum/maximum boundary, do not treat it as a fault; continue accepting pointer movement so reversing direction can resize again. Compute future requests from the initial frame, not by accumulating rounded accepted deltas.
 
-Coalesce pointer updates and target at most **60 frame transactions per second**, with at most one transaction running and one newest pending sample. Flush the latest eligible sample on ordinary completion; discard it on cancellation/suspension. Do not admit a new owned gesture until the previous gesture's final transaction/restoration has completed or been invalidated; a fresh down arriving during that short cleanup passes through. Use a 50 ms per-call Accessibility messaging timeout, setting the process-wide default through the system-wide AX element and any deliberate per-element overrides, and verify the return result. Do not assume setting an application element's timeout automatically applies to its child window objects. Do not wait on a worker from the event callback. A slow app may reduce achieved frame rate; responsiveness of input and Settings takes priority. See [Accessibility messaging timeouts](https://developer.apple.com/documentation/applicationservices/1459345-axuielementsetmessagingtimeout).
+Coalesce pointer updates and target at most **60 frame transactions per second**, with at most one transaction running and one newest pending sample. Flush the latest eligible sample on ordinary completion; discard it on cancellation/suspension. Do not admit a new owned gesture until the previous gesture's final transaction/restoration has completed or been invalidated; a fresh down arriving during that short cleanup passes through. Keep the 50 ms process-wide lookup default, a 75 ms hover budget, and a 180 ms foreground target-admission deadline. Starting a gesture invalidates hover work so it cannot continue consuming the lookup queue. Active updates use an override on the exact target AX window: 100 ms per call initially and up to 250 ms after a cannot-complete response, bounded by a 450 ms total transaction deadline. Reduce each call timeout to its remaining budget, check generation before every read/write, and reset the target override to the global default on every exit. Check timeout-setting results. Log rate-limited retry/failure diagnostics with the operation name, without window titles or contents. Do not assume setting an application element's timeout automatically applies to its child window objects. Do not wait on a worker from the event callback. A slow app may reduce achieved frame rate; responsiveness of input and Settings takes priority. See [Accessibility messaging timeouts](https://developer.apple.com/documentation/applicationservices/1459345-axuielementsetmessagingtimeout).
 
 ### 8.4 Window moving
 
@@ -390,7 +431,7 @@ Only one manipulation may be owned at a time. States:
 | Draining | No more geometry updates; consume the remainder of an already-claimed sequence until its physical up |
 | Pass Through Until Up | Candidate relinquished; forward the rest of that button sequence; do not recapture it |
 
-Keep provisional target resolution bounded to **75 ms**. On a cache miss, query asynchronously; on deadline expiry, invalid target, uncertainty, or unavailable permissions, release the sequence normally and use Pass Through Until Up. Check deadline/generation between AX lookup calls; discard late results without starting additional lookup calls. A down/up completed before validation may be released normally, even in Immediate mode, to avoid delaying clicks. “Immediate” means no movement threshold after eligibility is established; it does not authorize blocking the tap on AX.
+Keep foreground provisional target resolution bounded to **180 ms**, with hover still limited to 75 ms. On a cache miss, query asynchronously; on deadline expiry, invalid target, uncertainty, or unavailable permissions, release the sequence normally and use Pass Through Until Up. Check deadline/generation between AX lookup calls; discard late results without starting additional lookup calls. A down/up completed before validation may be released normally, even in Immediate mode, to avoid delaying clicks. “Immediate” means no movement threshold after eligibility is established; it does not authorize blocking the tap on AX.
 
 For an eligible threshold gesture, hold the initial down so the target app cannot begin its own drag. Keep only the original down and the newest coalesced subthreshold drag sample; memory must remain bounded during a long hold. On reaching the threshold, claim the sequence, discard the held ordinary mouse events, and begin manipulation. Do not send an ordinary down to the target first and then attempt to take it back.
 
@@ -425,35 +466,46 @@ Once a physical down has been consumed, never replay it as an ordinary click aft
 
 On normal suspension/disable, leave the tap alive only long enough to drain the owned sequence. On explicit quit, allow at most 500 ms of drain, then tear down and terminate; do not keep the process alive awaiting a user who continues holding a button. At forced tap loss/process termination, balanced delivery cannot be guaranteed because interception itself is unavailable. Clear application state, never synthesize a replacement click, and require a fresh physical down for the next operation.
 
-## 10. Window Resizer settings and feedback
+## 10. Window Move & Resize settings and feedback
 
 ### 10.1 Required controls and defaults
 
 | Setting | Default | Allowed values / dependency |
 | --- | --- | --- |
-| Enable Window Resizer | On | Utility-level switch |
+| Enable Window Move & Resize | On | Utility-level switch |
 | Resize Windows | On | Independent gesture switch |
 | Resize Activation | Immediate | Immediate; After Small Drag |
 | Resize Drag Threshold | 5 points | Integer 1–30; editor available only in After Small Drag |
-| Resize Corner Size | 200 points | Integer 8–400 |
+| Edge Zone Size | 200 points | Integer 8–400; shared by resizing and moving; available when either gesture is enabled |
 | Move Windows | On | Independent gesture switch |
 | Move Drag Threshold | 5 points | Integer 1–30; threshold activation always used |
+| Resize Visual Effects | On | Independent animation switch; static corner hints remain available |
+| Resize Effect | Iridescent Energy | Iridescent Energy; Furious Lightning; Ember Flame |
+| Move Visual Effects | On | Independent decoration switch; explicit window outline remains available |
+| Move Effect | Blue Mist | Blue Mist; Aurora Veil; Starlight Swirl; Cartoon Wind |
+| Animated effects | On | Master animation switch; Reduce Motion overrides without changing saved values |
 | Change Cursor During Gestures | On | Boolean; includes eligible Command hover and active gesture |
-| Show Corner Hints | On | Boolean; eligible corner while Command is held |
+| Show Corner Hints | On | Boolean; selected corner after Command + right-button resize activation |
 | Show Window Outline | Off | Boolean; actual accepted frame during active resize or move |
-| Reset Window Resizer | Action | Confirm, then restore this utility's defaults |
+| Reset Window Move & Resize | Action | Confirm, then restore this utility's defaults |
 
-Help text MUST state fixed Command/right-button and Command/left-button shortcuts, the distinction between corner and interior regions, threshold click-delay limitations, finish on Command/button release, Escape restoration, inactive-window behavior, and off-screen allowance.
+Help text MUST state fixed Command/right-button and Command/left-button shortcuts, the shared boundary between the outer resize band and moving centre, threshold click-delay limitations, finish on Command/button release, Escape restoration, inactive-window behavior, and off-screen allowance.
 
 The 5-point movement threshold is not linked to resize activation or its threshold. A change to resize Immediate MUST NOT change moving behavior. Settings changes are persisted immediately; visual feedback preferences may update during an active gesture, but geometry/activation parameters remain the gesture's initial snapshot. Disable and suspension always terminate immediately as defined above.
 
 ### 10.2 Cursor and overlays
 
+Both gesture sections expose their own saved effect selection, including No Effect. Keep the dropdowns editable regardless of the gesture switch, Animated effects, or Reduce Motion; those controls govern playback. Command-gesture resize animation also requires Show Corner Hints. No Effect stops that gesture's animated visual while leaving the separate hint and outline preferences available. Original effects remain defaults for existing installations; reset restores those choices and turns ordinary window-drag effects off.
+
+Furious Lightning maintains eight independently timed electrical fingers shooting outward from window edges. Pinned roots hold a spot until that finger collapses; walking roots change speed/direction chaotically and can cross perimeter corners. Each tip independently alternates between slow probing and sharp sweeps toward new targets. Finger lifetimes, mode-change timers, walking timers, and random streams are separate. Taper the leader from a broad white-hot base to fine violet-white streamers. Preserve proximal channel segments while rebuilding distal routes through irregular fractal growth. Tip steering must not rotate an entire fixed polyline. Independently timed restrikes change internal segment geometry and branch topology, including secondary twigs; briefly blend the previous discharge as a faint afterimage. Small radial streamers and a compact violet glow form the attachment corona. Collapse extinguishes the existing crooked route back toward the root while its strength fades. Release prevents replacements and lets individual fingers and sparks expire. Ember Flame retains warm rising turbulence. Moving alternatives include green-violet Aurora Veil curtains, rotating Starlight Swirl points, and Cartoon Wind. Effect changes retain the previous style in its own departure layer while the new style starts. Reduced Motion and disabled animation use static feedback and stop animation work.
+
+Cartoon Wind is an instanced particle field with diffuse grey-white ribbons, solid curved strips, dust, and sparse warm-coloured leaves. Its emission rate is 580 particles per second and its live limit is 1,680, both exactly four times their original values. Spawn a front wider/taller than the target window, upstream of it. Each particle owns a fixed world-space birth origin, velocity, material, age, and finite lifetime. Window position and vector changes affect future emissions; they never rotate or relocate existing particles. Smooth the emitter's turn and ramp emission, allowing old and new vectors to coexist. Keep the centre transparent. Release stops emission and allows the particles' remaining lifetimes to finish, up to 2.6 seconds. Retain previously used display surfaces so old wind can continue outside the current target region. Interior mist styles retain their window-edge fade. Wind and electrical arcs use bounded sprite/segment buffers on the existing click-through full-display surfaces; no effect captures window contents or intercepts input.
+
 When enabled and Command is held over an eligible resize corner, show the appropriate diagonal resize cursor; over an eligible moving interior, show an open-hand cursor, changing to closed hand during active moving. Use public `NSCursor` capabilities; create a static custom diagonal cursor asset if the SDK lacks a suitable public cursor. Do not use private cursor selectors, hide the pointer, or warp it.
 
 Cursor changes outside the app are best effort: another app may replace the cursor. Do not enter a high-frequency race with it. Restore cursor ownership on every exit path, including modifier release, hover exit, permission loss, suspension, errors, sleep, and quit. If cursor feedback cannot be reliable on a supported configuration, retain gesture function and document the visual limitation.
 
-Corner hints are small translucent marks at the eligible corner of the current hover target, shown only with Command held, resizing enabled, and engine ready. Do not outline every window or show hints for unsupported targets. The optional active outline follows the actual accepted AX frame and supports both resizing and moving. No screen images or window content are captured.
+Resize corner hints and animated effects first appear only after an actual Command + right-button resize gesture activates. Command-only hover may change the cursor, but must not show a corner marker, prepare an effect renderer, or start an animation timer. After Small Drag defers resize visuals until its threshold is crossed. Established idle feedback and natural dismissal after a completed gesture remain available. Do not outline every window or show hints for unsupported targets. The optional active outline follows the actual accepted AX frame and supports both resizing and moving. No screen images or window content are captured.
 
 Use borderless, transparent, nonactivating AppKit panels/windows with `ignoresMouseEvents = true`. They must never become key/main, steal focus, enter target hit testing, or intercept input. Use a public window level that keeps hints visible above the target without covering security prompts or unrelated system UI. Split/clamp drawing per display as necessary; do not visually connect across gaps between displays.
 
@@ -473,12 +525,16 @@ Persist application preferences in the application's standard UserDefaults domai
 | `windowResizer.resizeEnabled` | Boolean | true |
 | `windowResizer.resizeActivation` | String enum | `immediate` |
 | `windowResizer.resizeThresholdPoints` | Integer | 5 |
-| `windowResizer.cornerSizePoints` | Integer | 200 |
+| `windowResizer.cornerSizePoints` (legacy storage key for shared Edge Zone Size) | Integer | 200 |
 | `windowResizer.moveEnabled` | Boolean | true |
 | `windowResizer.moveThresholdPoints` | Integer | 5 |
 | `windowResizer.changeCursor` | Boolean | true |
 | `windowResizer.showCornerHints` | Boolean | true |
 | `windowResizer.showWindowOutline` | Boolean | false |
+| `windowResizer.animatedEffects` | Boolean | true |
+| `windowResizer.resizeEffect` | String enum, including `none` | `iridescentEnergy` |
+| `windowResizer.moveEffect` | String enum, including `none` | `blueMist` |
+| `windowResizer.normalWindowEffects` | Boolean | false |
 | `general.launchAtLoginRequested` | Boolean | false; Release login intent only |
 | `onboarding.assistantVersion` | Integer | 0 until first deliberate presentation |
 | `onboarding.assistantDisposition` | String enum | `notStarted`, then `skipped` or `completed` |
@@ -494,11 +550,11 @@ Schema migrations are small, ordered transformations in the preference store. Pr
 
 All resets use a native confirmation sheet identifying the exact scope, with Reset and Cancel. Navigation to a reset result never confirms it.
 
-- **Reset Window Resizer:** end an active gesture at its accepted frame, restore only `windowResizer.*`, and reconcile eligibility. Preserve master suspension, login intent, assistant state, and logs.
+- **Reset Window Move & Resize:** end an active gesture at its accepted frame, restore only `windowResizer.*`, and reconcile eligibility. Preserve master suspension, login intent, assistant state, and logs.
 - **Reset Scripts Preview:** recreate the fixed sample rows/history and preview controls in memory; this has no functional runtime effect.
-- **Reset All Preferences:** end active gestures, restore known preference defaults including Suspend All = off and utility switches = on, clear saved window layout, and reset scripts preview. Explicitly warn that this can resume enabled features if permissions are already granted. Preserve OS permission grants, assistant disposition, and existing log files. Use the separate assistant relaunch action to repeat guidance.
+- General has no Reset All Preferences action or corresponding search destinations.
 
-Reset All also requests login unregistration in the eligible Release app. If unregistration fails, reflect the actual OS registration state and show the error rather than falsely reporting that startup was disabled. Cancel performs no mutation. Apply a reset as one coordinated state change to avoid briefly starting features between individual key changes.
+Cancel performs no mutation. Apply a reset as one coordinated state change to avoid briefly starting features between individual key changes.
 
 ## 12. Launch at login and distribution
 
@@ -510,7 +566,7 @@ Use `SMAppService.mainApp` to register/unregister the existing main app; do not 
 
 Register only after an explicit toggle action in an installed, correctly signed Release app in a supported Applications location. If the app is running from a read-only image, a temporary/translocated location, or another unsuitable location, disable the preference with instructions to move it to Applications. Do not silently copy or relaunch it elsewhere. Ordinary startup must not repeatedly re-register or override a change the user made in System Settings.
 
-Turning the preference off unregisters it; it does not quit the current process. Quitting leaves the preference as configured for the next login. Saved Suspend All always wins on login startup. Login launch performs no automatic permission prompts and opens no Settings window.
+Turning the preference off unregisters it; it does not quit the current process. Quitting leaves the preference as configured for the next login. Saved Suspend All always wins on login startup. Login launch opens no Settings window; missing permissions follow the same once-per-launch request policy as a deliberate launch.
 
 ### 12.2 Direct delivery
 
@@ -656,7 +712,7 @@ Test ordinary Command-click and rapid double-click sequences with a mouse and a 
 
 - On a declared Apple silicon reference machine, background idle CPU should average below 0.5% of one core over five minutes, excluding deliberate interaction and OS activity.
 - No continuous window enumeration or pointer-rate AX queries when Command is not held and no gesture is active. Hover checks while Command is held are coalesced to at most 20 Hz.
-- On the cooperative fixture, target pointer-to-accepted-frame latency is ≤50 ms p95 during ordinary dragging. Treat the 75 ms admission deadline separately. Report real-app latency rather than claiming the same guarantee for unresponsive targets.
+- On the cooperative fixture, target pointer-to-accepted-frame latency is ≤50 ms p95 during ordinary dragging. Treat the 180 ms admission deadline separately. Report real-app latency rather than claiming the same guarantee for unresponsive targets.
 - No unbounded event buffers, retry loops, retained AX objects, or growth in overlay windows across 500 consecutive gestures.
 - Settings remains responsive during target AX stalls, log failures, and retries. Suspension and Escape must enqueue termination without waiting on AX.
 - The scripts page creates no repeating work or network traffic before, during, or after preview interactions.

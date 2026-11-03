@@ -7,6 +7,175 @@ private func jimmyEventCallback(proxy: CGEventTapProxy, type: CGEventType, event
     return Unmanaged<WindowGestureController>.fromOpaque(userInfo).takeUnretainedValue().receive(proxy: proxy, type: type, event: event)
 }
 
+/// A read-only view of a window under an ordinary mouse drag. Coordinates match
+/// CGEvent.location (Quartz desktop, origin at the primary display's top left).
+struct OrdinaryWindowSnapshot: Equatable {
+    let number: Int
+    let owner: Int32
+    let frame: CGRect
+    let level: Int
+    var feedbackWindow: FeedbackWindow { FeedbackWindow(number: number, level: level) }
+
+    private static func list() -> [[String: Any]] {
+        CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    }
+    private static func parse(_ info: [String: Any]) -> OrdinaryWindowSnapshot? {
+        guard let number = info[kCGWindowNumber as String] as? Int,
+              let owner = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+              let level = info[kCGWindowLayer as String] as? Int,
+              let bounds = info[kCGWindowBounds as String] as? [String: NSNumber],
+              let x = bounds["X"]?.doubleValue, let y = bounds["Y"]?.doubleValue,
+              let width = bounds["Width"]?.doubleValue, let height = bounds["Height"]?.doubleValue,
+              width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
+        return OrdinaryWindowSnapshot(number: number, owner: owner,
+                                      frame: CGRect(x: x, y: y, width: width, height: height), level: level)
+    }
+    private static func coversDisplay(_ frame: CGRect, at point: CGPoint) -> Bool {
+        var ids = Array(repeating: CGDirectDisplayID(0), count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return false }
+        return ids.prefix(Int(count)).contains { id in
+            let display = CGDisplayBounds(id)
+            return display.contains(point) &&
+                abs(frame.minX - display.minX) <= 2 && abs(frame.minY - display.minY) <= 2 &&
+                frame.width >= display.width * 0.95 && frame.height >= display.height * 0.95
+        }
+    }
+    static func hit(at point: CGPoint, excluding: Set<Int>) -> OrdinaryWindowSnapshot? {
+        let highest = Int(CGWindowLevelForKey(.floatingWindow))
+        for info in list() {
+            guard let window = parse(info), !excluding.contains(window.number),
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  window.frame.insetBy(dx: -5, dy: -5).contains(point) else { continue }
+            // The Dock and some system services keep a display-sized,
+            // click-through surface above ordinary windows. Ignore those;
+            // smaller menus and protected surfaces still block the hit.
+            if window.level > highest && coversDisplay(window.frame, at: point) { continue }
+            guard window.level >= 0, window.level <= highest,
+                  window.frame.width >= 70, window.frame.height >= 45 else { return nil }
+            return window
+        }
+        return nil
+    }
+    static func read(number: Int) -> OrdinaryWindowSnapshot? {
+        list().compactMap(parse).first { $0.number == number }
+    }
+}
+
+/// Watches native title-bar moves and edge resizes without retaining or changing
+/// their mouse events. Window metadata reads run off the input-tap callback.
+final class OrdinaryWindowEffectsObserver {
+    var onFeedback: ((GestureFeedback) -> Void)?
+    private let hit: (CGPoint, Set<Int>) -> OrdinaryWindowSnapshot?
+    private let read: (Int) -> OrdinaryWindowSnapshot?
+    private let worker = DispatchQueue(label: "app.jimmytweaks.ordinary-window-effects", qos: .userInitiated)
+    private var generation: UInt64 = 0
+    private var down: CGPoint?
+    private var target: OrdinaryWindowSnapshot?
+    private var dragging = false
+    private var inFlight = false
+    private var lastSample = 0.0
+    private var clock: Timer?
+    private var active: GestureFeedback?
+    private var preferences = GesturePreferences()
+
+    init(hit: @escaping (CGPoint, Set<Int>) -> OrdinaryWindowSnapshot? = OrdinaryWindowSnapshot.hit,
+         read: @escaping (Int) -> OrdinaryWindowSnapshot? = OrdinaryWindowSnapshot.read) {
+        self.hit = hit; self.read = read
+    }
+    deinit { clock?.invalidate() }
+    static func classify(initial: CGRect, current: CGRect, down: CGPoint, preferences: GesturePreferences) -> GestureKind? {
+        guard WindowGeometry.valid(initial), WindowGeometry.valid(current) else { return nil }
+        let sizeChanged = abs(current.width - initial.width) > 1 || abs(current.height - initial.height) > 1
+        let edgeDistance = min(abs(down.x - initial.minX), abs(down.x - initial.maxX),
+                               abs(down.y - initial.minY), abs(down.y - initial.maxY))
+        if sizeChanged, edgeDistance <= 12, preferences.resizeEffect != .none {
+            let corner = WindowCorner.allCases.min {
+                WindowGeometry.distance($0.point(in: initial), down) < WindowGeometry.distance($1.point(in: initial), down)
+            }!
+            return .resize(corner)
+        }
+        if !sizeChanged, WindowGeometry.distance(initial.origin, current.origin) > 1,
+           down.y >= initial.minY - 4, down.y <= initial.minY + 42,
+           preferences.moveEffect != .none { return .move }
+        return nil
+    }
+    func observe(type: CGEventType, point: CGPoint, command: Bool, allowed: Bool,
+                 preferences: GesturePreferences, excluding: Set<Int> = []) {
+        self.preferences = preferences
+        switch type {
+        case .leftMouseDown:
+            end()
+            guard allowed, !command, preferences.normalWindowEffectsActive else { return }
+            generation &+= 1; let token = generation
+            down = point
+            let reader = hit
+            worker.async { [weak self] in
+                let candidate = reader(point, excluding)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == token, self.down != nil else { return }
+                    self.target = candidate
+                    if self.dragging { self.sample() }
+                }
+            }
+        case .leftMouseDragged:
+            guard allowed, !command, preferences.normalWindowEffectsActive, let down else { end(); return }
+            guard WindowGeometry.distance(point, down) >= 3 else { return }
+            dragging = true; startClock(); sample()
+        case .leftMouseUp:
+            end()
+        case .flagsChanged:
+            if command || !allowed || !preferences.normalWindowEffectsActive { end() }
+        default: break
+        }
+    }
+    func update(_ preferences: GesturePreferences) {
+        self.preferences = preferences
+        if !preferences.normalWindowEffectsActive { end() }
+    }
+    func end() {
+        generation &+= 1
+        clock?.invalidate(); clock = nil
+        down = nil; target = nil; dragging = false; inFlight = false; lastSample = 0
+        if var feedback = active { feedback.dismissing = true; onFeedback?(feedback) }
+        active = nil
+    }
+    private func startClock() {
+        guard clock == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.sample() }
+        timer.tolerance = 0.005; RunLoop.main.add(timer, forMode: .common); clock = timer
+    }
+    private func sample() {
+        guard dragging, let down, let target, !inFlight else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastSample >= 1.0 / 30 else { return }
+        lastSample = now; inFlight = true
+        let token = generation, reader = read
+        worker.async { [weak self] in
+            let current = reader(target.number)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                self.inFlight = false
+                guard let current, current.owner == target.owner, current.level >= 0,
+                      current.level <= Int(CGWindowLevelForKey(.floatingWindow)) else { self.end(); return }
+                guard let kind = Self.classify(initial: target.frame, current: current.frame, down: down,
+                                               preferences: self.preferences) else { return }
+                if self.active?.frame == current.frame && self.active?.kind == kind &&
+                    self.active?.preferences == self.preferences { return }
+                var feedback = GestureFeedback(frame: current.frame, kind: kind, active: true,
+                                               preferences: self.preferences, window: current.feedbackWindow)
+                feedback.passive = true
+                self.active = feedback; self.onFeedback?(feedback)
+            }
+        }
+    }
+    #if TESTING
+    var activeForTesting: GestureFeedback? { active }
+    var observingForTesting: Bool { down != nil }
+    var targetForTesting: OrdinaryWindowSnapshot? { target }
+    #endif
+}
+
 /// Shared active session tap. State is serialized on the main run loop; AX work remains asynchronous.
 final class WindowGestureController: @unchecked Sendable {
     weak var shortcutRouter: ShortcutController?
@@ -15,15 +184,18 @@ final class WindowGestureController: @unchecked Sendable {
     var onFailure: ((String, RecoveryOwnership) -> Void)?
     var onPermissionConcern: (() -> Void)?
     var onFeedback: ((GestureFeedback?) -> Void)?
+    var onOrdinaryFeedback: ((GestureFeedback) -> Void)?
     private let windows: WindowAccessing
     private let logger: FileLogger
     private let preferences: Locked<GesturePreferences>
+    private let ordinaryEffects: OrdinaryWindowEffectsObserver
     private let admission = Locked(true)
     private let loop = Locked<CFRunLoop?>(nil)
     private let stopping = Locked(false)
     private let discardPendingInput = Locked(false)
     private let currentButton = Locked<MouseButton?>(nil)
     private let gate = GenerationGate()
+    private let hoverGate = GenerationGate()
     private let initialOwnership: RecoveryOwnership
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
@@ -55,9 +227,13 @@ final class WindowGestureController: @unchecked Sendable {
     private var exitFailure: String?
     private var exitOwnership = RecoveryOwnership()
     private static let replayMarker: Int64 = 0x4A544B535245504C
+    static let admissionTimeout: TimeInterval = 0.18
 
-    init(preferences: GesturePreferences, windows: WindowAccessing, logger: FileLogger, ownership: RecoveryOwnership = RecoveryOwnership()) {
+    init(preferences: GesturePreferences, windows: WindowAccessing, logger: FileLogger, ownership: RecoveryOwnership = RecoveryOwnership(),
+         ordinaryEffects: OrdinaryWindowEffectsObserver = OrdinaryWindowEffectsObserver()) {
         self.preferences = Locked(preferences); self.windows = windows; self.logger = logger; self.initialOwnership = ownership
+        self.ordinaryEffects = ordinaryEffects
+        ordinaryEffects.onFeedback = { [weak self] feedback in self?.onOrdinaryFeedback?(feedback) }
     }
     func start() {
         DispatchQueue.main.async { [self] in run() }
@@ -69,6 +245,7 @@ final class WindowGestureController: @unchecked Sendable {
         if !new.enabled || (button == .right && old.resizeEnabled && !new.resizeEnabled) || (button == .left && old.moveEnabled && !new.moveEnabled) { gate.close() }
         perform { [weak self] in
             guard let self = self else { return }
+            self.ordinaryEffects.update(new)
             let button = self.machine.session?.button ?? self.currentButton.snapshot
             if !new.enabled || (button == .left && !new.moveEnabled) || (button == .right && !new.resizeEnabled) {
                 self.execute(self.machine.cancel(replayPending: true, reason: "gesture-disabled"), event: nil, proxy: nil)
@@ -83,6 +260,7 @@ final class WindowGestureController: @unchecked Sendable {
         admission.withValue { $0 = false }; stopping.withValue { $0 = true }; gate.close()
         perform { [weak self] in
             guard let self = self else { return }
+            self.ordinaryEffects.end()
             if self.discardPendingInput.snapshot { self.discardBufferedInput() }
             self.execute(self.machine.cancel(replayPending: !self.discardPendingInput.snapshot, reason: "engine-stop"), event: nil, proxy: nil)
             self.invalidatePipeline(); self.maybeStop()
@@ -137,6 +315,7 @@ final class WindowGestureController: @unchecked Sendable {
     fileprivate func receive(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if event.getIntegerValueField(.eventSourceUserData) == Self.replayMarker { return Unmanaged.passUnretained(event) }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            ordinaryEffects.end()
             let owned = machine.ownsSequence ? machine.session?.button : nil
             exitOwnership = RecoveryOwnership(button: owned, escape: machine.escapeOwned)
             exitFailure = type == .tapDisabledByTimeout ? "The system disabled the input tap after a timeout." : "The system disabled the input tap."
@@ -169,6 +348,12 @@ final class WindowGestureController: @unchecked Sendable {
         }
         if let input = input {
             let decision = handle(input, event: event, proxy: proxy)
+            if type == .leftMouseDown || type == .leftMouseDragged || type == .leftMouseUp || type == .flagsChanged {
+                let excluded = type == .leftMouseDown ? Set(NSApp.windows.filter { !$0.styleMask.contains(.titled) }.map(\.windowNumber)) : []
+                ordinaryEffects.observe(type: type, point: event.location, command: currentModifiers.command,
+                    allowed: machine.phase == .idle && !finishing && admission.snapshot && shortcutRouter?.blocksGestures != true,
+                    preferences: preferences.snapshot, excluding: excluded)
+            }
             if type == .flagsChanged, currentModifiers.qualifies { requestHover(force: true) }
             maybeStop()
             return decision.suppress ? nil : Unmanaged.passUnretained(event)
@@ -243,9 +428,10 @@ final class WindowGestureController: @unchecked Sendable {
         }
     }
     private func resolve(id: UInt64, point: CGPoint, button: MouseButton) {
+        hoverGate.close(); hoverGeneration &+= 1
         activeToken = id; currentButton.withValue { $0 = button }; gate.open(id)
         let config = machine.session?.preferences ?? preferences.snapshot
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.075
+        let deadline = ProcessInfo.processInfo.systemUptime + Self.admissionTimeout
         windows.resolve(point: point, button: button, preferences: config, deadline: deadline,
                         stillValid: { [gate] in gate.valid(id) }) { [weak self] target in
             self?.perform { [weak self] in
@@ -255,9 +441,12 @@ final class WindowGestureController: @unchecked Sendable {
                 if self.machine.phase == .pending, let target = target { self.feedback(target.seed.frame, kind: target.seed.kind, active: false, window: target.feedbackWindow) }
             }
         }
-        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.075) { [weak self] in
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + Self.admissionTimeout) { [weak self] in
             self?.perform { [weak self] in
                 guard let self = self else { return }
+                if self.machine.phase == .resolving && self.machine.token == id {
+                    self.logger.rateLimited("admission.timeout", component: "gesture", event: "resolve.timeout", message: "Window admission exceeded 180 ms; preserving ordinary input.")
+                }
                 self.execute(self.machine.timeout(id: id), event: nil, proxy: nil)
             }
         }
@@ -298,11 +487,11 @@ final class WindowGestureController: @unchecked Sendable {
                     if !self.finishing { self.feedback(frame, kind: target.seed.kind, active: true, window: target.feedbackWindow) }
                     else if self.idleAfterMouseUp, self.modifiers.command { self.retainIdle(frame: frame, target: target) }
                 case .failure(let error):
-                    if case .ax(let code) = error, code == .apiDisabled {
+                    if error.axCode == .apiDisabled {
                         DispatchQueue.main.async { [weak self] in self?.onPermissionConcern?() }
                     }
                     self.logger.rateLimited(target.bundleID + error.category, component: "accessibility", event: "target.failure",
-                                            message: "target=\(target.bundleID); \(error.category)")
+                                            message: "target=\(target.bundleID); \(error.diagnostic)")
                     self.execute(self.machine.cancel(replayPending: false, reason: error.category), event: nil, proxy: nil)
                     self.invalidatePipeline()
                 }
@@ -322,13 +511,14 @@ final class WindowGestureController: @unchecked Sendable {
                 guard let self = self, self.activeToken == token else { return }
                 self.workerBusy = false
                 if case .failure(let error) = result {
-                    self.logger.log("gesture", "restore.failure", "target=\(target.bundleID); \(error.category)", severity: "WARN")
+                    self.logger.log("gesture", "restore.failure", "target=\(target.bundleID); \(error.diagnostic)", severity: "WARN")
                 }
                 self.finishPipeline()
             }
         }
     }
     private func invalidatePipeline() {
+        hoverGate.close()
         gate.close(); pendingPoint = nil; target = nil; finishing = false; restoring = false
         idleFeedback = nil; idleAfterMouseUp = false
         acceptedFeedbackFrame = nil; hoverGeneration &+= 1; publishFeedback(nil)
@@ -365,8 +555,9 @@ final class WindowGestureController: @unchecked Sendable {
         guard force || now - lastHoverTime >= 0.05 else { return }
         lastHoverTime = now; hoverBusy = true; hoverGeneration &+= 1
         let generation = hoverGeneration, pointer = lastPointer
+        hoverGate.open(generation)
         windows.resolve(point: pointer, button: nil, preferences: config, deadline: now + 0.075,
-                        stillValid: { [weak self] in self?.admission.snapshot == true }) { [weak self] hit in
+                        stillValid: { [hoverGate, admission] in hoverGate.valid(generation) && admission.snapshot }) { [weak self] hit in
             self?.perform { [weak self] in
                 guard let self = self else { return }; self.hoverBusy = false
                 guard generation == self.hoverGeneration, self.machine.phase == .idle,
@@ -399,6 +590,7 @@ final class WindowGestureController: @unchecked Sendable {
     }
     private func maybeStop() { if stopping.snapshot && !machine.ownsSequence && !replayOnNextEvent && shortcutRouter?.hasAbsorbedPress != true { tearDown() } }
     private func tearDown() {
+        ordinaryEffects.end()
         gate.close()
         guard let tap = tap else { return }
         if let heartbeat = heartbeat { CFRunLoopTimerInvalidate(heartbeat) }

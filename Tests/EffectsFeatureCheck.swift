@@ -1,5 +1,6 @@
 import AppKit
 import MetalKit
+import ImageIO
 
 private final class IdleFeedbackWindows: WindowAccessing {
     let kind: GestureKind
@@ -7,12 +8,14 @@ private final class IdleFeedbackWindows: WindowAccessing {
     var resolveCount = 0
     var writeCount = 0
     var holdWrites = false
+    var rejectResolution = false
     var held: [(CGRect, (Result<CGRect, WindowAccessError>) -> Void)] = []
     var finalFrame = CGRect.zero
     init(kind: GestureKind) { self.kind = kind }
     func resolve(point: CGPoint, button: MouseButton?, preferences: GesturePreferences, deadline: TimeInterval,
                  stillValid: @escaping () -> Bool, completion: @escaping (WindowTarget?) -> Void) {
         resolveCount += 1
+        if rejectResolution { completion(nil); return }
         completion(WindowTarget(element: AXUIElementCreateApplication(getpid()), pid: getpid(), bundleID: "effects.idle.fixture",
             seed: GestureSeed(frame: initialFrame, pointer: point, kind: kind)))
     }
@@ -49,12 +52,39 @@ private final class IdleFeedbackWindows: WindowAccessing {
         if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--fixture" {
             try fixture(URL(fileURLWithPath: CommandLine.arguments[2])); return
         }
+        if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--preview" {
+            try renderPreviews(URL(fileURLWithPath: CommandLine.arguments[2])); return
+        }
+        if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--ordinary" {
+            let root = URL(fileURLWithPath: CommandLine.arguments[2])
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            ordinaryDragCheck(); ordinaryNativeCheck(); try preferenceCheck(root)
+            print("\(checks - failures)/\(checks) ordinary-window effect checks passed.")
+            if failures > 0 { exit(1) }
+            return
+        }
+        if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--crystal" {
+            let root = URL(fileURLWithPath: CommandLine.arguments[2])
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try crystalFrostCheck(root)
+            print("\(checks - failures)/\(checks) Crystal Frost checks passed.")
+            if failures > 0 { exit(1) }
+            return
+        }
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try gpuCheck(root)
+        try presetCheck(root)
+        windHistoryCheck()
+        electricalBehaviourCheck()
+        electricalChannelCheck()
+        try windAndFizzleCheck(root)
         try smokeCursorCheck(root)
         idleLifecycleCheck(root)
+        resizeStartCheck(root)
         try overlayCheck(root)
+        ordinaryDragCheck()
+        ordinaryNativeCheck()
         try preferenceCheck(root)
         print("\(checks - failures)/\(checks) focused effect checks passed.")
         if failures > 0 { exit(1) }
@@ -309,6 +339,341 @@ private final class IdleFeedbackWindows: WindowAccessing {
         check(!renderer.failed, "GPU command buffers complete without errors")
     }
 
+    private static func presetCheck(_ root: URL) throws {
+        guard let renderer = ProceduralEffects() else { check(false, "Preset shaders compile"); return }
+        let rect = CGRect(x: -320, y: -200, width: 640, height: 400)
+        var snapshots: [WindowEffect: [UInt8]] = [:]
+        for effect in WindowEffect.allCases where effect != .none {
+            let mist = WindowEffect.moveOptions.contains(effect)
+            let fieldRect = effect == .cartoonWind || effect == .furiousLightning ? rect.insetBy(dx: -420, dy: -420) : rect
+            renderer.restart()
+            var configured = true
+            for i in 0..<(effect == .cartoonWind || effect == .furiousLightning ? 90 : 24) {
+                configured = renderer.configure(rect: fieldRect, source: .zero, arms: SIMD2(1, 1), mist: mist, motion: EffectMotion(), effect: effect, windowRect: rect) && configured
+                _ = renderer.render(surfaces: [], at: Double(i) / 60)
+                renderer.waitForGPUForTesting()
+            }
+            check(configured, "\(effect.title) allocates its field")
+            let pixels = renderer.snapshot(rect: fieldRect, width: 640, height: 400)!
+            snapshots[effect] = pixels
+            check(alphaMaximum(pixels) > 20, "\(effect.title) produces a visible effect")
+            try save(pixels, width: 640, height: 400, to: root.appendingPathComponent(effect.rawValue + ".png"))
+        }
+        for options in [WindowEffect.resizeOptions.filter { $0 != .none }, WindowEffect.moveOptions.filter { $0 != .none }] {
+            for i in 0..<options.count {
+                for j in (i + 1)..<options.count {
+                    check(snapshots[options[i]] != snapshots[options[j]], "\(options[i].title) and \(options[j].title) render differently")
+                }
+            }
+        }
+        let lightning = snapshots[.furiousLightning]!
+        let bright = stride(from: 0, to: lightning.count, by: 4).filter { lightning[$0 + 3] > 200 }
+        check(bright.count > 100 && bright.contains { lightning[$0] > lightning[$0 + 2] }, "Furious Lightning has bright blue-white bolt cores")
+        let lightningDomain = rect.insetBy(dx: -420, dy: -420)
+        let extended = (0..<400).contains { y in (0..<640).contains { x in
+            let point = CGPoint(x: lightningDomain.minX + CGFloat(x) / 640 * lightningDomain.width,
+                                y: lightningDomain.maxY - CGFloat(y) / 400 * lightningDomain.height)
+            return !rect.insetBy(dx: -40, dy: -40).contains(point) && lightning[(y * 640 + x) * 4 + 3] > 80
+        } }
+        check(extended, "Lightning fingers shoot well outside the window edges")
+        for corner in WindowCorner.allCases {
+            renderer.restart()
+            let arms = SIMD2<Float>(corner.isLeft ? 1 : -1, corner.isTop ? -1 : 1)
+            let window = CGRect(x: -100, y: -60, width: 200, height: 120)
+            _ = renderer.configure(rect: rect, source: .zero, arms: arms, mist: false, motion: EffectMotion(), effect: .furiousLightning, windowRect: window)
+            _ = renderer.render(surfaces: [], at: 0); renderer.waitForGPUForTesting()
+            let first = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            check(alphaMaximum(first) < 30, "\(corner.name) lightning enters gently instead of flashing on")
+            _ = renderer.render(surfaces: [], at: 0.15); renderer.waitForGPUForTesting()
+            _ = renderer.render(surfaces: [], at: 0.3); renderer.waitForGPUForTesting()
+            _ = renderer.render(surfaces: [], at: 0.45); renderer.waitForGPUForTesting()
+            let next = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            check(first != next, "\(corner.name) lightning restrikes over time")
+            _ = renderer.configure(rect: rect, source: .zero, arms: arms, mist: false, motion: EffectMotion(), smoke: 0.4, effect: .furiousLightning, windowRect: window)
+            _ = renderer.render(surfaces: [], at: 0.5); renderer.waitForGPUForTesting()
+            let smoke = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            check(alphaMaximum(smoke) > 8 && !isGrey(smoke), "\(corner.name) lightning leaves a weakening electrical fizzle")
+        }
+        check(!renderer.failed, "All preset GPU commands complete successfully")
+    }
+
+    private static func crystalFrostCheck(_ root: URL) throws {
+        check(WindowEffect.resizeOptions.contains(.crystalFrost) &&
+              !WindowEffect.moveOptions.contains(.crystalFrost) &&
+              WindowEffect.crystalFrost.title == "Crystal Frost",
+              "Crystal Frost is offered only for resizing")
+        let preferences = PreferenceStore(defaults: MemoryDefaults())
+        preferences.set(WindowEffect.crystalFrost.rawValue, for: .resizeEffect)
+        check(preferences.gesture.resizeEffect == .crystalFrost,
+              "Crystal Frost remains selected after the resize preference is saved")
+        var field = CrystalFrostField()
+        let corner = SIMD2<Float>(140, 300), arms = SIMD2<Float>(1, -1)
+        for _ in 0..<10 { field.advance(dt: 1 / 60, corner: corner, arms: arms, emitting: true) }
+        let before = field.flakes
+        field.advance(dt: 1 / 60, corner: corner + SIMD2(100, -50), arms: arms, emitting: false)
+        check(!before.isEmpty && field.flakes.count == before.count &&
+              zip(before, field.flakes).allSatisfy { $0.origin == $1.origin },
+              "Existing crystals keep their world positions when the resize corner moves")
+        for _ in 0..<90 { field.advance(dt: 1 / 60, corner: corner, arms: arms, emitting: true) }
+        check(field.flakes.count > 20 && field.flakes.count <= CrystalFrostField.capacity &&
+              field.flakes.contains { $0.size >= 40 } &&
+              field.flakes.allSatisfy { simd_length($0.velocity) < 18 },
+              "Crystals appear in varied sizes with little drift and a bounded live count")
+        check(field.flakes.contains { abs($0.origin.x - corner.x) > 40 } &&
+              field.flakes.contains { abs($0.origin.y - corner.y) > 40 } &&
+              field.flakes.allSatisfy { simd_length($0.origin - corner) < 175 },
+              "Crystals appear at varied nearby positions instead of emitting from the corner")
+        let departing = field.flakes.count
+        field.advance(dt: 1 / 60, corner: corner, arms: arms, emitting: false)
+        check(field.flakes.count <= departing, "Finishing a resize stops crystal emission immediately")
+        for cornerPose in WindowCorner.allCases {
+            var sparkle = CrystalFrostField()
+            let inward = SIMD2<Float>(cornerPose.isLeft ? 1 : -1, cornerPose.isTop ? -1 : 1)
+            for _ in 0..<60 { sparkle.advance(dt: 1 / 60, corner: corner, arms: inward, emitting: true) }
+            check(sparkle.flakes.contains { inward.x * ($0.origin.x - corner.x) > 40 } &&
+                  sparkle.flakes.contains { inward.y * ($0.origin.y - corner.y) > 40 },
+                  "\(cornerPose.name) crystals sparkle along both nearby edges")
+        }
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            print("SKIP: Metal rendering preview (this environment has no Metal graphics device)")
+            return
+        }
+        let rect = CGRect(x: 0, y: 0, width: 640, height: 400)
+        let window = CGRect(x: 140, y: 90, width: 320, height: 210)
+        for corner in WindowCorner.allCases {
+            guard let renderer = ProceduralEffects() else { check(false, "Crystal Frost shader compiles"); return }
+            let source = CGPoint(x: corner.isLeft ? window.minX : window.maxX,
+                                 y: corner.isTop ? window.maxY : window.minY)
+            let directions = SIMD2<Float>(corner.isLeft ? 1 : -1, corner.isTop ? -1 : 1)
+            func frame(_ index: Int, departure: Float? = nil) {
+                _ = renderer.configure(rect: rect, source: source, arms: directions, mist: false,
+                                       motion: EffectMotion(), smoke: departure, effect: .crystalFrost,
+                                       windowRect: window)
+                _ = renderer.render(surfaces: [], at: Double(index) / 60)
+                renderer.waitForGPUForTesting()
+            }
+            frame(0)
+            let early = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            for i in 1...55 { frame(i) }
+            let complete = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            let visible: ([UInt8]) -> Int = { pixels in
+                stride(from: 3, to: pixels.count, by: 4).filter { pixels[$0] > 40 }.count
+            }
+            check(visible(complete) > visible(early) * 3 && alphaMaximum(complete) > 100,
+                  "\(corner.name) frost rapidly grows around the active corner")
+            let oppositeX = Int(corner.isLeft ? window.maxX : window.minX)
+            let farEdge = (0..<400).reduce(0) { count, y in
+                count + ((oppositeX - 8)...(oppositeX + 8)).filter { x in
+                    complete[(y * 640 + x) * 4 + 3] > 40
+                }.count
+            }
+            check(farEdge == 0, "\(corner.name) frost and crystals leave the opposite edge clear")
+            try save(complete, width: 640, height: 400,
+                     to: root.appendingPathComponent("crystal-frost-\(corner.name).png"))
+            frame(56, departure: 0.50)
+            let shimmer = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            check(alphaMaximum(shimmer) > 60, "\(corner.name) completed frost remains visible during its shimmer")
+            frame(57, departure: 0.99)
+            let faded = renderer.snapshot(rect: rect, width: 640, height: 400)!
+            check(alphaMaximum(faded) < 20, "\(corner.name) frost and flakes fade at the end")
+            check(!renderer.failed, "\(corner.name) GPU work completes")
+        }
+    }
+
+    private static func windHistoryCheck() {
+        check(WindField.emissionRate == 580 && WindField.capacity == 1680, "Wind emission and live-particle capacity are both four times the original")
+        let window = CGRect(x: -200, y: -120, width: 400, height: 240)
+        var field = WindField()
+        for _ in 0..<90 { field.advance(dt: 1 / 60, window: window, velocity: SIMD2(350, 0), emitting: true) }
+        check(Set(field.particles.map(\.material)) == Set(0...3), "Wind contains diffuse ribbons, solid strips, dust, and leaves")
+        check(field.particles.contains { abs($0.origin.y) > 170 }, "The emitted wind front is taller than the window")
+        var unchangedVector = field
+        unchangedVector.advance(dt: 1 / 60, window: window, velocity: SIMD2(350, 0), emitting: false)
+        let previousIDs = Set(field.particles.map(\.id))
+        field.advance(dt: 1 / 60, window: window.offsetBy(dx: 500, dy: 400), velocity: SIMD2(0, 400), emitting: true)
+        let comparison = Dictionary(uniqueKeysWithValues: unchangedVector.particles.map { ($0.id, $0) })
+        check(field.particles.filter { previousIDs.contains($0.id) }.allSatisfy {
+            comparison[$0.id]?.position == $0.position && comparison[$0.id]?.velocity == $0.velocity
+        }, "Turning or moving the window never rotates or relocates existing wind particles")
+        for _ in 0..<60 { field.advance(dt: 1 / 60, window: window, velocity: SIMD2(0, 400), emitting: true) }
+        check(field.particles.contains { previousIDs.contains($0.id) && $0.velocity.x > 250 } &&
+              field.particles.contains { !previousIDs.contains($0.id) && $0.velocity.y > 250 },
+              "Old and new wind directions coexist while the emitter turns")
+        for _ in 0..<240 { field.advance(dt: 1 / 60, window: window, velocity: .zero, emitting: true) }
+        check(field.particles.count > 900 && field.particles.count <= WindField.capacity, "Fourfold wind density remains bounded during long drags")
+        for _ in 0..<160 { field.advance(dt: 1 / 60, window: window, velocity: .zero, emitting: false) }
+        check(field.particles.isEmpty, "Released wind particles finish their own lifetimes without replacement")
+    }
+
+    private static func electricalBehaviourCheck() {
+        let window = CGRect(x: -200, y: -120, width: 400, height: 240)
+        var field = ElectricalField()
+        var previous: [UInt64: (anchored: Bool, edge: Int, offset: Float, angle: Float, sweep: Bool, age: Float)] = [:]
+        var pinned = true, walking = false, probing = false, sweeping = false, mixedCollapse = false, independentSwitch = false
+        var longestPin: Float = 0
+        var rootsOnEdges = true
+        for i in 0..<720 {
+            field.advance(dt: 1 / 60, window: window, corner: SIMD2(-200, -120), arms: SIMD2(1, 1), speed: 0, emitting: true)
+            let states = field.fingersForTesting
+            let active = states.filter { $0.age > 0 && $0.remaining > 0 }
+            var changedModes = 0
+            for state in active {
+                rootsOnEdges = rootsOnEdges && state.offset >= 0 && state.offset <= 1
+                if let old = previous[state.id] {
+                    if state.anchored {
+                        pinned = pinned && old.edge == state.edge && old.offset == state.offset
+                        longestPin = max(longestPin, state.age)
+                    } else if old.edge != state.edge || abs(old.offset - state.offset) > 0.001 { walking = true }
+                    let angularSpeed = abs(state.angle - old.angle) * 60
+                    if !state.sweep && angularSpeed > 0.005 && angularSpeed < 1.6 { probing = true }
+                    if state.sweep && angularSpeed > 2.5 { sweeping = true }
+                    if old.sweep != state.sweep { changedModes += 1 }
+                }
+            }
+            if changedModes == 1 && active.count >= 4 { independentSwitch = true }
+            if active.contains(where: \.collapsing) && active.contains(where: { !$0.collapsing }) { mixedCollapse = true }
+            previous = Dictionary(uniqueKeysWithValues: active.map { ($0.id, ($0.anchored, $0.edge, $0.offset, $0.angle, $0.sweep, $0.age)) })
+            if i == 60 {
+                let sprites = field.sprites(departure: nil).filter { $0.appearance.y == 4 }
+                check(sprites.count >= 32 && sprites[0].appearance.w > sprites[31].appearance.w * 8, "A lightning finger has a broad base tapering to a fine tip")
+            }
+        }
+        check(rootsOnEdges, "Electrical roots stay on a window edge")
+        check(pinned && longestPin > 1.1, "Pinned lightning roots hold one spot for seconds")
+        check(walking, "Walking fingers travel along and around the window edges")
+        check(probing && sweeping, "Fingers alternate between gentle probing and violent tip sweeps")
+        check(independentSwitch && mixedCollapse, "One finger may change behaviour or collapse while others continue independently")
+        check(field.fingersForTesting.count == 8, "Long-running electrical behaviour uses a bounded set of fingers")
+        for _ in 0..<100 { field.advance(dt: 1 / 60, window: window, corner: SIMD2(-200, -120), arms: SIMD2(1, 1), speed: 0, emitting: false) }
+        check(field.sprites(departure: nil).isEmpty, "Release collapses every finger and lets the remaining sparks expire")
+    }
+
+    private static func electricalChannelCheck() {
+        var field = ElectricalField()
+        let window = CGRect(x: -200, y: -120, width: 400, height: 240)
+        var previous: [UInt64: (revision: Int, points: [SIMD2<Float>])] = [:]
+        var stableFrames = 0, reroutes = 0, preservedRoots = true, internalChanges = 0
+        var branchCounts = Set<Int>(), bounded = true
+        for _ in 0..<360 {
+            field.advance(dt: 1 / 60, window: window, corner: SIMD2(-200, -120), arms: SIMD2(1, 1), speed: 0, emitting: true)
+            let channels = field.dischargesForTesting
+            for channel in channels where channel.anchored && !channel.collapsing {
+                bounded = bounded && channel.branches <= 18
+                branchCounts.insert(channel.branches)
+                guard let old = previous[channel.id] else { continue }
+                if old.revision == channel.revision {
+                    stableFrames += 1
+                    preservedRoots = preservedRoots && old.points == channel.points
+                } else {
+                    reroutes += 1
+                    preservedRoots = preservedRoots && Array(old.points.prefix(3)) == Array(channel.points.prefix(3))
+                    let oldLengths = zip(old.points, old.points.dropFirst()).map { simd_length($1 - $0) }
+                    let newLengths = zip(channel.points, channel.points.dropFirst()).map { simd_length($1 - $0) }
+                    if zip(oldLengths, newLengths).reduce(Float(0), { $0 + abs($1.0 - $1.1) }) > 5 { internalChanges += 1 }
+                }
+            }
+            previous = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, ($0.revision, $0.points)) })
+        }
+        check(stableFrames > 20 && preservedRoots, "Pinned electrical channels hold their proximal route instead of rotating as rigid sticks")
+        check(reroutes > 20 && internalChanges > 20, "Restrikes rebuild the internal channel geometry, not just its endpoint")
+        check(branchCounts.count > 3, "The number and arrangement of lightning streamers repeatedly reform")
+        check(bounded, "Branching discharge trees remain bounded")
+    }
+
+    private static func resizeStartCheck(_ root: URL) {
+        for immediate in [true, false] {
+            var prefs = GesturePreferences(); prefs.resizeEffect = .furiousLightning
+            prefs.immediateResize = immediate
+            let windows = IdleFeedbackWindows(kind: .resize(.topLeft))
+            let logger = FileLogger(directory: root.appendingPathComponent("lightning-hover"), maintenance: false)
+            let engine = WindowGestureController(preferences: prefs, windows: windows, logger: logger)
+            engine.attachToCurrentRunLoopForTesting()
+            var latest: GestureFeedback?
+            engine.onFeedback = { latest = $0 }
+            engine.hoverForTesting(at: .zero, modifiers: Modifiers(command: true, extra: false)); settle(0.03)
+            check(latest?.kind == .resize(.topLeft) && latest?.active == false && latest?.idle == false && windows.writeCount == 0,
+                  "Command-only hover is cursor feedback, never an active resize")
+            let resolves = windows.resolveCount
+            let unmodified = engine.handleForTesting(.down(.right, .zero, Modifiers(command: false, extra: false)))
+            _ = engine.handleForTesting(.up(.right, .zero)); settle(0.02)
+            check(!unmodified.suppress && windows.resolveCount == resolves && latest?.active != true, "Right-button alone cannot begin resize visuals")
+            engine.handleForTesting(.down(.right, .zero, Modifiers(command: true, extra: false))); settle(0.03)
+            check(latest?.active == immediate, "Resize visuals respect Immediate versus After Small Drag activation")
+            if !immediate {
+                engine.handleForTesting(.drag(.right, CGPoint(x: 3, y: 0))); settle(0.02)
+                check(latest?.active == false, "A subthreshold resize stays visually inactive")
+            }
+            engine.handleForTesting(.drag(.right, CGPoint(x: 12, y: 10))); settle(0.03)
+            check(latest?.active == true && latest?.kind == .resize(.topLeft), "Command plus right-button resizing activates its effect")
+            engine.handleForTesting(.up(.right, CGPoint(x: 12, y: 10))); settle(0.03)
+            engine.handleForTesting(.flags(Modifiers(command: false, extra: false))); settle(0.03)
+            check(latest?.dismissing == true || latest == nil, "A started resize retains its normal dismissal when Command is released")
+        }
+    }
+
+    private static func windAndFizzleCheck(_ root: URL) throws {
+        guard let renderer = ProceduralEffects() else { check(false, "Wind and fizzle shaders compile"); return }
+        let rect = CGRect(x: -600, y: -400, width: 1200, height: 800)
+        let window = CGRect(x: -200, y: -120, width: 400, height: 240)
+        func windFrame(_ time: Double, departure: Float? = nil) -> [UInt8] {
+            _ = renderer.configure(rect: rect, source: .zero, arms: .zero, mist: true, motion: EffectMotion(), smoke: departure, effect: .cartoonWind, windowRect: window)
+            _ = renderer.render(surfaces: [], at: time); renderer.waitForGPUForTesting()
+            return renderer.snapshot(rect: rect, width: 1200, height: 800)!
+        }
+        let entrance = windFrame(0)
+        check(alphaMaximum(entrance) < 12, "Cartoon Wind starts with a soft entrance")
+        var wind = entrance
+        for i in 1...70 { wind = windFrame(Double(i) / 60) }
+        check(alphaMaximum(wind) > 80, "Layered wind grows into visible gusts and particles")
+        var exterior = 0, overWindow = 0, centre = 0
+        for y in 0..<800 {
+            for x in 0..<1200 where wind[(y * 1200 + x) * 4 + 3] > 12 {
+                let point = CGPoint(x: Double(x) - 600, y: 400 - Double(y))
+                if point.x < window.minX - 80 { exterior += 1 }
+                if window.contains(point) { overWindow += 1 }
+                if abs(point.x) < 50 && abs(point.y) < 30 { centre += 1 }
+            }
+        }
+        check(exterior > 100, "Wind starts well outside the window")
+        check(overWindow > 50 && centre == 0, "Wind curls over the window edge while its centre stays completely clear")
+        try save(wind, width: 1200, height: 800, to: root.appendingPathComponent("cartoon-wind-exterior.png"))
+        var departing = wind, wisps = wind, gone = wind
+        for i in 1...156 {
+            let frame = windFrame(Double(70 + i) / 60, departure: Float(i) / 156)
+            if i == 12 { departing = frame }
+            if i == 86 { wisps = frame }
+            if i == 156 { gone = frame }
+        }
+        check(alphaMaximum(departing) > 50 && departing != wind, "Released wind keeps drifting instead of vanishing")
+        check(alphaMaximum(wisps) > 5 && alphaMaximum(wisps) < alphaMaximum(departing), "Departing wind thins gradually into wisps")
+        check(alphaMaximum(gone) == 0, "Wind is fully transparent when its natural departure finishes")
+        try save(wisps, width: 1200, height: 800, to: root.appendingPathComponent("cartoon-wind-wisps.png"))
+
+        renderer.restart()
+        func lightningFrame(_ time: Double, departure: Float? = nil) -> [UInt8] {
+            _ = renderer.configure(rect: rect, source: .zero, arms: SIMD2(1, 1), mist: false, motion: EffectMotion(), smoke: departure, effect: .furiousLightning, windowRect: window)
+            _ = renderer.render(surfaces: [], at: time); renderer.waitForGPUForTesting()
+            return renderer.snapshot(rect: rect, width: 1200, height: 800)!
+        }
+        let first = lightningFrame(0)
+        var charged = first
+        for i in 1...24 { charged = lightningFrame(Double(i) / 60) }
+        check(alphaMaximum(first) < 30 && alphaMaximum(charged) > 180, "Lightning ramps from a faint charge to bright bolts")
+        let fizzle = lightningFrame(0.42, departure: 0.12)
+        check(alphaMaximum(fizzle) > 10 && !isGrey(fizzle) && fizzle != charged, "Lightning breaks into fading coloured sparks before the smoke fade")
+        let residual = lightningFrame(0.5, departure: 0.4)
+        check(alphaMaximum(residual) > 5 && !isGrey(residual), "Lightning retains a dim ionized residual while its charge fizzles")
+        check(alphaMaximum(lightningFrame(0.6, departure: 1)) == 0, "Lightning finishes fully transparent")
+        try save(fizzle, width: 1200, height: 800, to: root.appendingPathComponent("lightning-fizzle.png"))
+        renderer.restart()
+        for i in 0..<60 {
+            _ = renderer.configure(rect: rect, source: CGPoint(x: window.minX, y: window.minY), arms: SIMD2(1, 1), mist: false, motion: EffectMotion(), effect: .furiousLightning, windowRect: window)
+            _ = renderer.render(surfaces: [], at: Double(i) / 60)
+            renderer.waitForGPUForTesting()
+        }
+        try save(renderer.snapshot(rect: rect, width: 1200, height: 800)!, width: 1200, height: 800, to: root.appendingPathComponent("tesla-coil-exterior.png"))
+    }
+
     private static func overlayCheck(_ root: URL) throws {
         let infoURL = root.appendingPathComponent("fixture.json")
         try? FileManager.default.removeItem(at: infoURL)
@@ -332,6 +697,18 @@ private final class IdleFeedbackWindows: WindowAccessing {
         func show(_ frame: CGRect, _ kind: GestureKind = .resize(.bottomLeft), idle: Bool = false) {
             feedback.show(GestureFeedback(frame: quartz(frame), kind: kind, active: !idle, preferences: prefs, window: FeedbackWindow(number: target, level: 0), idle: idle))
         }
+        for effect in WindowEffect.resizeOptions {
+            prefs.resizeEffect = effect
+            feedback.show(GestureFeedback(frame: quartz(appKitFrame), kind: .resize(.bottomLeft), active: false, preferences: prefs,
+                window: FeedbackWindow(number: target, level: 0)))
+            settle(0.04)
+            check(!feedback.timerRunningForTesting && !feedback.rendererReadyForTesting && feedback.panelsForTesting.allSatisfy { !$0.isVisible },
+                  "\(effect.title) cannot start on Command-only hover or pending resize feedback")
+        }
+        prefs.animatedEffects = false
+        feedback.show(GestureFeedback(frame: quartz(appKitFrame), kind: .resize(.bottomLeft), active: false, preferences: prefs))
+        check(feedback.panelsForTesting.allSatisfy { !$0.isVisible }, "Static corner markers also wait for a resize gesture")
+        prefs.animatedEffects = true; prefs.resizeEffect = .iridescentEnergy
         show(appKitFrame)
         wait(10) { feedback.rendererReadyForTesting }
         settle(0.35)
@@ -428,6 +805,16 @@ private final class IdleFeedbackWindows: WindowAccessing {
         check(!feedback.timerRunningForTesting && panel.isVisible, "Turning animations off keeps the steady corner marker visible")
         prefs.animatedEffects = true; show(appKitFrame); settle(0.1)
         check(feedback.timerRunningForTesting, "Saved animation choice resumes after the override is removed")
+        prefs.resizeEffect = .furiousLightning; show(appKitFrame); settle(0.12)
+        check(feedback.timerRunningForTesting && feedback.smokeCountForTesting > 0, "Changing the resize preset live overlaps the old smoke and new lightning")
+        prefs.resizeEffect = .none; show(appKitFrame); settle(0.02)
+        check(!feedback.timerRunningForTesting && panel.isVisible, "Disabling resize effects leaves a static corner hint without animation work")
+        prefs.moveEffect = .none; show(appKitFrame, .move); settle(0.02)
+        check(!feedback.timerRunningForTesting && feedback.panelsForTesting.allSatisfy { !$0.isVisible }, "Disabling move effects removes its decoration")
+        prefs.moveEffect = .starlightSwirl; show(appKitFrame, .move); settle(0.12)
+        check(feedback.timerRunningForTesting && panel.isVisible, "Moving can use its selected effect independently of disabled resize effects")
+        prefs.moveEffect = .cartoonWind; show(appKitFrame, .move); settle(0.4)
+        check(feedback.timerRunningForTesting && feedback.simulationBoundsForTesting == desktop && fullScreenSurface(panel), "Cartoon Wind renders outside the target through a full-display surface")
         feedback.clear(); settle(0.05)
         let hiddenAt = feedback.effectFramesForTesting
         settle(0.1)
@@ -441,9 +828,30 @@ private final class IdleFeedbackWindows: WindowAccessing {
         let logger = FileLogger(directory: root.appendingPathComponent("logs"), maintenance: false)
         let runtime = RuntimeCoordinator(preferences: prefs, permissions: permissions, logger: logger)
         let context = SettingsContext(preferences: prefs, permissions: permissions, runtime: runtime, logger: logger, login: LoginService(preferences: prefs))
-        let page = WindowPageController(.window, context: context)
+        let page = VisualEffectsPageController(.visualEffects, context: context)
         var reduced = false; page.reduceMotion = { reduced }; _ = page.view
         let checkbox = page.controls["window.feedback.animatedEffects"] as! NSButton
+        let resizePopup = page.controls["window.resize.effect"] as! ActionPopup
+        let movePopup = page.controls["window.move.effect"] as! ActionPopup
+        let normalToggle = page.controls["visualEffects.normalWindowDrags"] as! NSButton
+        check(page.controls["window.resize.effectsEnabled"] == nil && page.controls["window.move.effectsEnabled"] == nil,
+              "The two effect switches have been removed")
+        check(normalToggle.state == .off && !prefs.gesture.normalWindowEffects,
+              "Ordinary window effects are an opt-in checkbox")
+        normalToggle.state = .on; _ = normalToggle.sendAction(normalToggle.action!, to: normalToggle.target)
+        check(prefs.gesture.normalWindowEffects, "Ordinary window effects choice is saved")
+        check(resizePopup.itemTitles == WindowEffect.resizeOptions.map(\.title) && movePopup.itemTitles == WindowEffect.moveOptions.map(\.title), "Both gestures offer correctly scoped effect choices")
+        check(resizePopup.itemTitles.first == "No Effect" && movePopup.itemTitles.first == "No Effect",
+              "Both effect menus begin with No Effect")
+        check(movePopup.itemTitles.contains("Cartoon Wind") && context.catalog.search("Cartoon Wind").contains { $0.id == "window.move.effect" }, "Cartoon Wind is available in the moving dropdown and Settings search")
+        check(context.catalog.search("Furious Lightning").contains { $0.id == "window.resize.effect" }, "Furious Lightning is discoverable through Settings search")
+        resizePopup.selectItem(withTitle: "Furious Lightning"); _ = resizePopup.sendAction(resizePopup.action!, to: resizePopup.target)
+        movePopup.selectItem(withTitle: "Aurora Veil"); _ = movePopup.sendAction(movePopup.action!, to: movePopup.target)
+        check(prefs.gesture.resizeEffect == .furiousLightning && prefs.gesture.moveEffect == .auroraVeil, "Dropdown actions save independent effect choices")
+        resizePopup.selectItem(withTitle: "No Effect"); _ = resizePopup.sendAction(resizePopup.action!, to: resizePopup.target)
+        check(prefs.gesture.resizeEffect == .none && prefs.gesture.moveEffect == .auroraVeil && resizePopup.isEnabled,
+              "No Effect disables resizing visuals and leaves both selectors usable")
+        resizePopup.selectItem(withTitle: "Furious Lightning"); _ = resizePopup.sendAction(resizePopup.action!, to: resizePopup.target)
         check(checkbox.isEnabled && checkbox.state == .on && prefs.gesture.animatedEffects, "Animated effects preference is searchable, enabled, and defaults on")
         reduced = true
         NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
@@ -451,13 +859,154 @@ private final class IdleFeedbackWindows: WindowAccessing {
         let note = views(page.view).compactMap { $0 as? NSTextField }.first { $0.stringValue == "Disabled because Reduce Motion is enabled in System Settings." }
         check(!checkbox.isEnabled && checkbox.state == .off && note?.isHidden == false, "Reduce Motion disables the checkbox and displays its explanation beside it")
         check(prefs.bool(.animatedEffects), "Reduce Motion preserves the saved animation preference")
+        check(resizePopup.isEnabled && movePopup.isEnabled && prefs.gesture.resizeEffect == .furiousLightning, "Reduce Motion leaves effect choices editable without changing saved effects")
         reduced = false
         NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         check(checkbox.isEnabled && checkbox.state == .on && note?.isHidden == true, "Changing Reduce Motion restores the saved checkbox state live")
         prefs.set(false, for: .animatedEffects); page.refreshValues()
         check(!prefs.gesture.animatedEffects && checkbox.state == .off, "Explicitly disabled animation preference reaches the input engine")
-        prefs.resetWindow()
-        check(prefs.gesture.animatedEffects, "Reset Window Resizer restores the animation default")
+        check(resizePopup.isEnabled && movePopup.isEnabled, "The master animation switch leaves effect choices editable")
+        prefs.resetWindow(); page.refreshValues()
+        check(prefs.gesture.animatedEffects, "Reset Window Move & Resize restores the animation default")
+        check(resizePopup.titleOfSelectedItem == "Iridescent Energy" && movePopup.titleOfSelectedItem == "Blue Mist" && resizePopup.isEnabled && movePopup.isEnabled && !prefs.gesture.normalWindowEffects,
+              "Reset refreshes both effect dropdowns and turns off ordinary window effects")
+        let old = MemoryDefaults()
+        old.set(WindowEffect.emberFlame.rawValue, forKey: PreferenceKey.resizeEffect.rawValue)
+        old.set(false, forKey: "windowResizer.resizeEffectsEnabled")
+        check(PreferenceStore(defaults: old).gesture.resizeEffect == .none && old.object(forKey: "windowResizer.resizeEffectsEnabled") == nil,
+              "An unchecked legacy effect switch migrates to No Effect")
+    }
+
+    private static func ordinaryDragCheck() {
+        let initial = OrdinaryWindowSnapshot(number: 401, owner: 32,
+            frame: CGRect(x: 100, y: 100, width: 400, height: 300), level: 0)
+        let current = Locked(initial)
+        let observer = OrdinaryWindowEffectsObserver(hit: { point, _ in
+            initial.frame.contains(point) ? current.snapshot : nil
+        }, read: { number in
+            let snapshot = current.snapshot
+            return snapshot.number == number ? snapshot : nil
+        })
+        var received: [GestureFeedback] = []
+        observer.onFeedback = { received.append($0) }
+        var prefs = GesturePreferences()
+        let titlePoint = CGPoint(x: 300, y: 111)
+        observer.observe(type: .leftMouseDown, point: titlePoint, command: false, allowed: true, preferences: prefs)
+        check(!observer.observingForTesting && received.isEmpty, "Normal clicks do not start observation until the option is enabled")
+        prefs.normalWindowEffects = true
+        observer.observe(type: .leftMouseDown, point: titlePoint, command: false, allowed: true, preferences: prefs)
+        wait(1) { observer.targetForTesting != nil }
+        check(observer.targetForTesting?.number == initial.number, "A normal down identifies the visible window without changing input")
+        current.withValue { $0 = OrdinaryWindowSnapshot(number: 401, owner: 32, frame: initial.frame.offsetBy(dx: 40, dy: 10), level: 0) }
+        observer.observe(type: .leftMouseDragged, point: CGPoint(x: 340, y: 121), command: false, allowed: true, preferences: prefs)
+        wait(1) { observer.activeForTesting?.kind == .move }
+        check(observer.activeForTesting?.passive == true && observer.activeForTesting?.frame == current.snapshot.frame,
+              "A title-bar drag produces moving feedback from the actual window frame")
+        observer.observe(type: .leftMouseUp, point: CGPoint(x: 340, y: 121), command: false, allowed: true, preferences: prefs)
+        check(received.last?.dismissing == true && !observer.observingForTesting,
+              "A normal mouse-up starts the effect's departure and stops sampling")
+
+        current.withValue { $0 = initial }
+        let edgePoint = CGPoint(x: 498, y: 250)
+        observer.observe(type: .leftMouseDown, point: edgePoint, command: false, allowed: true, preferences: prefs)
+        wait(1) { observer.targetForTesting != nil }
+        current.withValue { $0 = OrdinaryWindowSnapshot(number: 401, owner: 32,
+            frame: CGRect(x: 100, y: 100, width: 450, height: 300), level: 0) }
+        observer.observe(type: .leftMouseDragged, point: CGPoint(x: 548, y: 250), command: false, allowed: true, preferences: prefs)
+        wait(1) { if case .resize? = observer.activeForTesting?.kind { return true }; return false }
+        check(observer.activeForTesting?.passive == true && observer.activeForTesting?.frame.width == 450,
+              "A normal edge drag produces resizing feedback only after the window changes size")
+        observer.observe(type: .leftMouseUp, point: CGPoint(x: 548, y: 250), command: false, allowed: true, preferences: prefs)
+        check(OrdinaryWindowEffectsObserver.classify(initial: initial.frame, current: initial.frame.offsetBy(dx: 20, dy: 0),
+                down: CGPoint(x: 300, y: 250), preferences: prefs) == nil,
+              "A content drag does not trigger moving visuals")
+        var disabled = prefs; disabled.moveEffect = .none
+        check(OrdinaryWindowEffectsObserver.classify(initial: initial.frame, current: initial.frame.offsetBy(dx: 20, dy: 0),
+                down: titlePoint, preferences: disabled) == nil,
+              "No Effect suppresses ordinary moving feedback")
+        disabled.resizeEffect = .none
+        check(!disabled.normalWindowEffectsActive, "No selected effect leaves no passive observation work")
+    }
+
+    private static func ordinaryNativeCheck() {
+        guard let screen = NSScreen.screens.first else { return }
+        let window = NSWindow(contentRect: CGRect(x: screen.frame.midX - 220, y: screen.frame.midY - 150, width: 440, height: 300),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.title = "Ordinary effect geometry fixture"
+        window.orderFrontRegardless(); settle(0.06)
+        defer { window.orderOut(nil) }
+        guard let initial = OrdinaryWindowSnapshot.read(number: window.windowNumber) else {
+            check(false, "Window Server exposes the native title-bar fixture"); return
+        }
+        let titlePoint = CGPoint(x: initial.frame.midX, y: initial.frame.minY + 14)
+        let titleHit = OrdinaryWindowSnapshot.hit(at: titlePoint, excluding: [])
+        if titleHit?.number != window.windowNumber {
+            let visible = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+            print("Native hit debug: target=\(window.windowNumber), hit=\(titleHit?.number ?? -1), point=\(titlePoint)")
+            for info in visible.prefix(12) {
+                print("Native hit layer: id=\(info[kCGWindowNumber as String] ?? -1), owner=\(info[kCGWindowOwnerPID as String] ?? -1), level=\(info[kCGWindowLayer as String] ?? -1), bounds=\(info[kCGWindowBounds as String] ?? [:])")
+            }
+        }
+        check(titleHit?.number == window.windowNumber,
+              "A native title-bar hit resolves the foreground window")
+        window.setFrameOrigin(window.frame.origin.applying(CGAffineTransform(translationX: 38, y: 0)))
+        settle(0.06)
+        let moved = OrdinaryWindowSnapshot.read(number: window.windowNumber)
+        if moved == nil || abs(moved!.frame.minX - initial.frame.minX - 38) > 2 {
+            print("Native move debug: initial=\(initial.frame), AppKit=\(window.frame), sampled=\(String(describing: moved?.frame))")
+        }
+        check(moved != nil && abs(moved!.frame.minX - initial.frame.minX - 38) <= 2,
+              "Read-only Window Server sampling follows an actual native window move")
+    }
+
+    private static func renderPreviews(_ root: URL) throws {
+        let rect = CGRect(x: -600, y: -400, width: 1200, height: 800)
+        let initialWindow = CGRect(x: -180, y: -110, width: 420, height: 280)
+        for effect in [WindowEffect.cartoonWind, .furiousLightning] {
+            guard let renderer = ProceduralEffects() else { throw CocoaError(.coderInvalidValue) }
+            let wind = effect == .cartoonWind
+            let activeFrames = wind ? 180 : 360, tailFrames = wind ? 156 : 80
+            let url = root.appendingPathComponent(wind ? "wind-field-preview.gif" : "tesla-lightning-preview.gif")
+            let destination = CGImageDestinationCreateWithURL(url as CFURL, "com.compuserve.gif" as CFString, (activeFrames + tailFrames + 2) / 3, nil)!
+            CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+            var motion = EffectMotion()
+            for i in 0..<(activeFrames + tailFrames) {
+                let t = Double(i) / 60
+                let position = !wind ? CGPoint.zero : CGPoint(x: min(1.6, t) * 70, y: max(0, min(1.4, t - 1.6)) * 85)
+                let window = initialWindow.offsetBy(dx: position.x, dy: position.y)
+                motion.sample(position, at: t)
+                let progress: Float? = i < activeFrames ? nil : Float(i - activeFrames) / Float(tailFrames - 1)
+                _ = renderer.configure(rect: rect, source: wind ? CGPoint(x: window.midX, y: window.midY) : CGPoint(x: window.minX, y: window.minY),
+                    arms: wind ? .zero : SIMD2(1, 1), mist: wind, motion: motion, smoke: progress, effect: effect, windowRect: window)
+                _ = renderer.render(surfaces: [], at: t); renderer.waitForGPUForTesting()
+                guard i % 3 == 0, let pixels = renderer.snapshot(rect: rect, width: 1200, height: 800) else { continue }
+                let provider = CGDataProvider(data: Data(pixels) as CFData)!
+                let overlay = CGImage(width: 1200, height: 800, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 4800,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue),
+                    provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)!
+                let context = CGContext(data: nil, width: 720, height: 480, bitsPerComponent: 8, bytesPerRow: 2880,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                context.scaleBy(x: 0.6, y: 0.6)
+                context.setFillColor(CGColor(red: 0.075, green: 0.09, blue: 0.12, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 1200, height: 800))
+                let box = window.offsetBy(dx: 600, dy: 400)
+                context.setFillColor(CGColor(gray: 0.18, alpha: 1)); context.addPath(CGPath(roundedRect: box, cornerWidth: 12, cornerHeight: 12, transform: nil)); context.fillPath()
+                context.setStrokeColor(CGColor(gray: 0.45, alpha: 1)); context.setLineWidth(1); context.stroke(box.insetBy(dx: 0.5, dy: 0.5))
+                context.setFillColor(CGColor(gray: 0.27, alpha: 1)); context.fill(CGRect(x: box.minX, y: box.maxY - 34, width: box.width, height: 1))
+                for dot in 0..<3 {
+                    context.setFillColor([CGColor(red: 0.95, green: 0.36, blue: 0.32, alpha: 1), CGColor(red: 0.95, green: 0.75, blue: 0.25, alpha: 1), CGColor(red: 0.35, green: 0.76, blue: 0.38, alpha: 1)][dot])
+                    context.fillEllipse(in: CGRect(x: box.minX + 16 + CGFloat(dot) * 20, y: box.maxY - 23, width: 10, height: 10))
+                }
+                context.draw(overlay, in: CGRect(x: 0, y: 0, width: 1200, height: 800))
+                let frame = context.makeImage()!
+                CGImageDestinationAddImage(destination, frame, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.05]] as CFDictionary)
+                if i == 75 {
+                    let still = CGImageDestinationCreateWithURL(root.appendingPathComponent(wind ? "wind-field-scene.png" : "tesla-lightning-scene.png") as CFURL, "public.png" as CFString, 1, nil)!
+                    CGImageDestinationAddImage(still, frame, nil); _ = CGImageDestinationFinalize(still)
+                }
+            }
+            guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+            print("Rendered \(url.lastPathComponent)")
+        }
     }
 
     private static func fixture(_ destination: URL) throws {

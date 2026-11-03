@@ -29,7 +29,7 @@ Selection and ordering persist through the existing PreferenceStore/UserDefaults
 domain. Each running app can contribute several individual preview icons.
 Stopped selected applications stay in the management list. All module preferences
 are off by default except best-effort floating-panel positioning. Reset Window
-Resizer preserves this module; Reset All also clears its selection.
+Move & Resize preserves this module; Reset All also clears its selection.
 
 Drag selected rows, or use Move Earlier/Later, to reorder applications. Preview
 icons retain relative native item widths and scroll horizontally if necessary.
@@ -72,7 +72,7 @@ crash remains a manual acceptance test, not something inferred from this design.
 
 Disable, Restore All, Suspend All, sleep, inactive sessions, permission denial,
 service failure and normal shutdown all stop the holder. Settings may close while
-enabled absorption continues. Failure leaves Window Resizer/Window Mover running
+enabled absorption continues. Failure leaves Window Move & Resize running
 independently. Missing helper binaries report an error with restoration rather
 than affecting unrelated features. Command-line and Xcode builds both bundle and
 sign the helper; distribution re-signs it before signing the enclosing app.

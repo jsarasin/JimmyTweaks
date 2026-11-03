@@ -19,6 +19,10 @@ import AppKit
         ShortcutTests.run(logger: logger)
         SettingsRegressionTests.run(logger: logger)
         IconAbsorberPreviewTests.run(logger: logger)
+        try SnowStormTests.run(root: root)
+        try ChristmasTests.run(root: root)
+        try FireplaceTests.run(root: root)
+        try DesktopInteractionTests.run(logger: logger, root: root)
         let controller = SettingsWindowController(context: context)
         guard let window = controller.window else { fatalError("Settings window missing") }
         window.layoutIfNeeded()
@@ -84,10 +88,13 @@ import AppKit
         assert(context.catalog.search("move threshold").contains { $0.id == "window.move.threshold" })
         assert(context.catalog.search("script preview").contains { $0.destination.page == .scripts })
         assert(context.catalog.search("menu bar").contains { $0.destination.page == .iconAbsorber })
-        assert(SettingsPage.allCases.map(\.title) == ["General", "Permissions", "Window Resizer", "Icon Absorber", "Custom Shortcuts", "Reoccurring Scripts", "Logging", "About"])
+        assert(SettingsPage.allCases.map(\.title) == ["General", "Permissions", "Window Move & Resize", "Visual Effects", "Icon Absorber", "Custom Shortcuts", "Reoccurring Scripts", "Logging", "About"])
         assert(window.titlebarAccessoryViewControllers.isEmpty, "The redundant top status strip is removed")
         context.navigate?(SearchDestination(page: .general, controlID: "")); settle()
         let generalViews = views(window.contentView!)
+        assert(!generalViews.compactMap { $0 as? NSButton }.contains { $0.title.hasPrefix("Reset All Preferences") })
+        assert(!context.catalog.entries.contains { $0.id == "general.resetAll" || $0.id.hasPrefix("reset.all.") }, "Removed reset has no dead search destinations")
+        assert(permissions.pollingIntervalForTesting == nil, "A suspended utility does not poll when Permissions is hidden")
         let systemSettingsButtons = generalViews.compactMap { $0 as? NSButton }.filter { $0.title == "Open System Settings" }
         assert(systemSettingsButtons.isEmpty, "General keeps preferences; permission controls live in Permissions")
         assert(!context.catalog.entries.contains { $0.id.hasPrefix("assistant.") || $0.id == "navigation.status" })
@@ -111,6 +118,10 @@ import AppKit
         }
         assert(context.catalog.search("screen recording").contains { $0.destination.page == .permissions && $0.id == "permissions.screenRecording" }, "Permission entries are searchable")
         let permissionsPage = window.contentViewController!.children.flatMap(\.children).compactMap { $0 as? PermissionsPageController }.first!
+        assert(permissions.pollingIntervalForTesting == (permissions.allGranted ? 30 : 2), "The visible Permissions page checks missing access every two seconds")
+        assert(!views(permissionsPage.view).compactMap { $0 as? NSButton }.contains { ["Allow Input Monitoring", "Check Permissions Again"].contains($0.title) })
+        assert(!context.catalog.entries.contains { ["permissions.inputMonitoring.allow", "permissions.refresh"].contains($0.id) })
+        assert(permissionsPage.controls["permissions.inputMonitoring.open"] != nil && permissionsPage.controls["permissions.screenRecording.open"] != nil)
         let resetButton = permissionsPage.controls["permissions.reset"] as! ActionButton
         let savedConfirm = context.confirm, savedReset = context.resetPermissionsAndQuit
         var permissionResetRequests = 0, permissionResetConfirmation: (() -> Void)?
@@ -127,15 +138,28 @@ import AppKit
 
         prefs.shortcuts = []
         let mark = MenuBarController.makeIcon()
-        assert(mark.isTemplate && mark.size == NSSize(width: 20, height: 20), "Serif J adapts to the menu bar appearance")
+        assert(mark.isTemplate && mark.size == NSSize(width: 20, height: 20), "Celtic J adapts to the menu bar appearance")
         assert(context.catalog.search("not-a-setting-349138").isEmpty)
         context.navigate?(SearchDestination(page: .window, controlID: "window.move.threshold")); settle()
         if let field = views(window.contentView!).first(where: { $0.identifier?.rawValue == "window.move.threshold" }) as? NSTextField {
             assert(field.stringValue == "5")
         } else { fatalError("Threshold control missing") }
-        if let field = views(window.contentView!).first(where: { $0.identifier?.rawValue == "window.resize.cornerSize" }) as? NSTextField {
-            assert(field.stringValue == "200", "Corner size defaults to 200 points")
-        } else { fatalError("Corner size control missing") }
+        let edgeFields = views(window.contentView!).compactMap { $0 as? NSTextField }.filter { $0.identifier?.rawValue == "window.edgeZoneSize" }
+        assert(edgeFields.count == 1, "One shared edge size editor serves both gestures")
+        let edgeField = edgeFields[0]
+        assert(edgeField.stringValue == "200", "Shared edge size defaults to 200 points")
+        assert(!context.catalog.entries.contains { $0.id == "window.resize.cornerSize" || $0.label == "Corner Size" })
+        assert(context.catalog.search("edge zone").contains { $0.id == "window.edgeZoneSize" })
+        for (resize, move, enabled) in [(false, true, true), (true, false, true), (false, false, false)] {
+            prefs.set(resize, for: .resizeEnabled); prefs.set(move, for: .moveEnabled); settle()
+            assert(edgeField.isEnabled == enabled, "Shared size editor follows either enabled gesture")
+        }
+        prefs.set(true, for: .resizeEnabled); prefs.set(true, for: .moveEnabled); settle()
+        edgeField.stringValue = "64"
+        assert(edgeField.sendAction(edgeField.action!, to: edgeField.target))
+        assert(prefs.gesture.edgeZoneSize == 64, "Shared editor updates the engine preference")
+        prefs.resetWindow(); settle()
+        assert(edgeField.stringValue == "200", "Window reset refreshes the shared size editor")
         if let search = views(window.contentView!).compactMap({ $0 as? NSSearchField }).first {
             search.stringValue = "move threshold"
             search.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: search)); settle()
@@ -163,14 +187,14 @@ import AppKit
         DispatchQueue.global(qos: .userInteractive).async {
             ownWindows.resolve(point: .zero, button: .right, preferences: prefs.gesture,
                                deadline: ProcessInfo.processInfo.systemUptime + 2, stillValid: { true }) { target in
-                assert(target == nil, "Our own process must never become a window target")
+                assert(target == nil, "A hit outside an eligible local window must not become a target")
                 resolved.withValue { $0 = true }
             }
         }
         let resolutionDeadline = Date().addingTimeInterval(3)
         while !resolved.snapshot && Date() < resolutionDeadline { settle() }
         assert(resolved.snapshot && hitTests == 1, "Background resolution completes through main-thread hit testing")
-        assert(attributeReads.snapshot == 0, "Reject own-process hits before traversing AppKit attributes")
+        assert(attributeReads.snapshot == 0, "Local targets use native window access without cross-process AX traversal")
 
         // Numeric resets replace invalid drafts even when the stored value was
         // already the default; unrelated refreshes preserve inline validation.

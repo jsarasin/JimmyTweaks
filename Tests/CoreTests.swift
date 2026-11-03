@@ -23,12 +23,44 @@ import CoreGraphics
                 expect("\(corner.name) dimensions remain positive", desired.width >= 1 && desired.height >= 1)
                 expect("\(corner.name) opposite anchor fixed", WindowGeometry.distance(corner.anchor(in: desired), corner.anchor(in: frame)) < 0.001)
             }
-            expect("\(corner.name) corner hit", WindowGeometry.corner(at: corner.point(in: frame), frame: frame, size: 24) == corner)
+            expect("\(corner.name) corner hit", WindowGeometry.activationKind(at: corner.point(in: frame), frame: frame, edgeZoneSize: 24) == .resize(corner))
         }
-        expect("Center is not resize corner", WindowGeometry.corner(at: CGPoint(x: frame.midX, y: frame.midY), frame: frame, size: 24) == nil)
-        expect("Tiny-window tie is stable", WindowGeometry.corner(at: CGPoint(x: 5, y: 5), frame: CGRect(x: 0, y: 0, width: 10, height: 10), size: 24) == .topLeft)
-        expect("Interior excludes title bar", !WindowGeometry.interiorContains(CGPoint(x: 100, y: 20), frame: CGRect(x: 0, y: 0, width: 300, height: 300)))
-        expect("Interior accepts content", WindowGeometry.interiorContains(CGPoint(x: 100, y: 60), frame: CGRect(x: 0, y: 0, width: 300, height: 300)))
+        expect("Center moves", WindowGeometry.activationKind(at: CGPoint(x: frame.midX, y: frame.midY), frame: frame, edgeZoneSize: 24) == .move)
+        expect("Tiny windows retain a usable moving centre", WindowGeometry.activationKind(at: CGPoint(x: 5, y: 5), frame: CGRect(x: 0, y: 0, width: 10, height: 10), edgeZoneSize: 24) == .move)
+        // Exercise every edge's exact boundary and both neighbours at fractional, negative coordinates.
+        for size in [8.0, 24, 200, 400] {
+            let large = CGRect(x: -900.5, y: -700.25, width: 1200, height: 1000)
+            for depth in [size - 0.001, size, size + 0.001] {
+                for point in [CGPoint(x: large.minX + depth, y: large.midY),
+                              CGPoint(x: large.maxX - depth, y: large.midY),
+                              CGPoint(x: large.midX, y: large.minY + depth),
+                              CGPoint(x: large.midX, y: large.maxY - depth)] {
+                    let kind = WindowGeometry.activationKind(at: point, frame: large, edgeZoneSize: size)
+                    expect("Shared boundary has no gap or overlap", kind != nil && (kind == .move) == (depth > size))
+                }
+            }
+            for bounds in [large, frame, CGRect(x: -10, y: -20, width: 10, height: 6)] {
+                for x in 0...20 {
+                    for y in 0...20 {
+                        let point = CGPoint(x: bounds.minX + bounds.width * Double(x) / 20,
+                                            y: bounds.minY + bounds.height * Double(y) / 20)
+                        let kind = WindowGeometry.activationKind(at: point, frame: bounds, edgeZoneSize: size)
+                        let inset = WindowGeometry.effectiveEdgeZoneSize(frame: bounds, requested: size)
+                        let inCentre = point.x > bounds.minX + inset && point.x < bounds.maxX - inset &&
+                            point.y > bounds.minY + inset && point.y < bounds.maxY - inset
+                        expect("Every point belongs to exactly one activation area", kind != nil && (kind == .move) == inCentre)
+                    }
+                }
+            }
+            for point in [CGPoint(x: large.minX - 0.501, y: large.midY), CGPoint(x: large.maxX + 0.501, y: large.midY),
+                          CGPoint(x: large.midX, y: large.minY - 0.501), CGPoint(x: large.midX, y: large.maxY + 0.501)] {
+                expect("Outside the window is ineligible", WindowGeometry.activationKind(at: point, frame: large, edgeZoneSize: size) == nil)
+            }
+        }
+        let square = CGRect(x: 0, y: 0, width: 300, height: 300)
+        expect("Shared inset replaces separate title-bar exclusion", WindowGeometry.activationKind(at: CGPoint(x: 100, y: 20), frame: square, edgeZoneSize: 8) == .move)
+        expect("Edge middle selects nearest corner with stable tie", WindowGeometry.activationKind(at: CGPoint(x: 150, y: 0), frame: square, edgeZoneSize: 8) == .resize(.topLeft))
+        expect("Invalid window rejected", WindowGeometry.activationKind(at: .zero, frame: .zero, edgeZoneSize: 8) == nil)
         expect("Moving keeps cursor offset", GestureSeed(frame: frame, pointer: CGPoint(x: -200, y: 200), kind: .move).desiredFrame(at: CGPoint(x: -150, y: 230)) == frame.offsetBy(dx: 50, dy: 30))
         expect("Euclidean threshold", abs(WindowGeometry.distance(.zero, CGPoint(x: 3, y: 4)) - 5) < 0.0001)
         var random: UInt64 = 42
@@ -123,7 +155,7 @@ import CoreGraphics
             var frame = original, constrainedPosition = true, writes = 0
             func apply(_ pointer: CGPoint, check: () throws -> Void = {}) throws -> CGRect {
                 try WindowFrameTransaction.apply(seed: seed, pointer: pointer, check: check,
-                    readFrame: { frame }, readSize: { frame.size },
+                    readFrame: { frame },
                     setPosition: { point in
                         writes += 1
                         frame.origin = constrainedPosition ? CGPoint(x: max(120, point.x), y: max(120, point.y)) : point
@@ -160,9 +192,62 @@ import CoreGraphics
         let seed = GestureSeed(frame: original, pointer: CGPoint(x: 200, y: 200), kind: .move)
         for pointer in [CGPoint(x: -2000, y: -1000), CGPoint(x: 4000, y: 3000), seed.pointer] {
             let accepted = try WindowFrameTransaction.apply(seed: seed, pointer: pointer, check: {},
-                readFrame: { moved }, readSize: { moved.size }, setPosition: { moved.origin = $0 },
+                readFrame: { moved }, setPosition: { moved.origin = $0 },
                 setSize: { _ in expect("Moving never resizes", false) })
             expect("Moving follows outside pointer and returns to origin", accepted == seed.desiredFrame(at: pointer))
+        }
+        // Model a foreign app that clips AXSize to the space remaining between
+        // its current origin and the screen/Dock, and constrains AXPosition too.
+        // A valid final frame can still fail if size is written at the old origin.
+        for bounds in [CGRect(x: 0, y: 24, width: 1440, height: 800),
+                       CGRect(x: -1200, y: -860, width: 1000, height: 760)] {
+            for corner in WindowCorner.allCases {
+                let original = CGRect(x: corner.isLeft ? bounds.maxX - 500 : bounds.minX,
+                                      y: corner.isTop ? bounds.maxY - 340 : bounds.minY,
+                                      width: 500, height: 340)
+                let seed = GestureSeed(frame: original, pointer: corner.point(in: original), kind: .resize(corner))
+                var frame = original, writes = 0
+                func apply(_ pointer: CGPoint, restoring: Bool = false, check: () throws -> Void = {}) throws -> CGRect {
+                    writes = 0
+                    return try WindowFrameTransaction.apply(seed: seed, pointer: pointer, restoring: restoring, check: check,
+                        readFrame: { frame },
+                        setPosition: { point in
+                            writes += 1
+                            frame.origin = CGPoint(x: min(max(point.x, bounds.minX), bounds.maxX - frame.width),
+                                                   y: min(max(point.y, bounds.minY), bounds.maxY - frame.height))
+                        }, setSize: { size in
+                            writes += 1
+                            frame.size = CGSize(width: min(size.width, bounds.maxX - frame.minX),
+                                                height: min(size.height, bounds.maxY - frame.minY))
+                        })
+                }
+                for delta in [CGSize(width: 80, height: 70), CGSize(width: -60, height: 90),
+                              CGSize(width: 90, height: -60), CGSize(width: -50, height: -40)] {
+                    let pointer = CGPoint(x: seed.pointer.x + (corner.isLeft ? -delta.width : delta.width),
+                                          y: seed.pointer.y + (corner.isTop ? -delta.height : delta.height))
+                    let desired = seed.desiredFrame(at: pointer)
+                    let accepted = try apply(pointer)
+                    expect("\(corner.name) edge/Dock constraint accepts reachable size", WindowGeometry.approximatelyEqual(accepted, desired))
+                    expect("\(corner.name) edge/Dock constraint preserves opposite corner", WindowGeometry.distance(corner.anchor(in: accepted), corner.anchor(in: original)) < 0.5)
+                    expect("Edge/Dock reconciliation is bounded", writes <= 4)
+                    _ = try apply(pointer)
+                    expect("An accepted resize is not written again", writes == 0)
+                    _ = try apply(pointer, restoring: true)
+                    expect("Escape restores edge/Dock frame", WindowGeometry.approximatelyEqual(frame, original))
+                }
+                let pointer = CGPoint(x: seed.pointer.x + (corner.isLeft ? -80 : 80),
+                                      y: seed.pointer.y + (corner.isTop ? -70 : 70))
+                _ = try apply(pointer)
+                _ = try apply(seed.pointer)
+                expect("Reversing to the initial pointer restores edge/Dock frame", WindowGeometry.approximatelyEqual(frame, original))
+                enum Cancelled: Error { case cancelled }
+                do {
+                    _ = try apply(pointer, check: { if writes > 0 { throw Cancelled.cancelled } })
+                    expect("Cancellation between edge/Dock writes fails the transaction", false)
+                } catch Cancelled.cancelled {
+                    expect("Cancellation prevents all subsequent geometry writes", writes == 1)
+                }
+            }
         }
     }
     static func preferences() {
@@ -171,9 +256,29 @@ import CoreGraphics
         defaults.set("bad", forKey: PreferenceKey.enabled.rawValue)
         defaults.set("unknown", forKey: PreferenceKey.activation.rawValue)
         let p = PreferenceStore(defaults: defaults)
-        expect("Default corner size is 200 points", p.int(.cornerSize) == 200 && GesturePreferences().cornerSize == 200)
-        p.set(200, for: .cornerSize)
-        expect("Corner range permits the new default", p.int(.cornerSize) == 200)
+        expect("Default shared edge size is 200 points", p.int(.edgeZoneSize) == 200 && GesturePreferences().edgeZoneSize == 200)
+        let legacy = MemoryDefaults(); legacy.set(72, forKey: "windowResizer.cornerSizePoints")
+        expect("Existing corner choice becomes shared edge size", PreferenceStore(defaults: legacy).gesture.edgeZoneSize == 72)
+        p.set(1, for: .edgeZoneSize)
+        expect("Shared edge size clamps to minimum", p.gesture.edgeZoneSize == 8)
+        p.set(500, for: .edgeZoneSize)
+        expect("Shared edge size clamps to maximum", p.gesture.edgeZoneSize == 400)
+        expect("Original effects remain defaults", p.gesture.resizeEffect == .iridescentEnergy && p.gesture.moveEffect == .blueMist)
+        expect("Both gesture effects default on", p.gesture.effectsEnabled(for: .resize(.topLeft)) && p.gesture.effectsEnabled(for: .move))
+        p.set(WindowEffect.furiousLightning.rawValue, for: .resizeEffect)
+        p.set(WindowEffect.auroraVeil.rawValue, for: .moveEffect)
+        p.set(WindowEffect.none.rawValue, for: .resizeEffect)
+        let effects = PreferenceStore(defaults: defaults).gesture
+        expect("Independent effect selections persist", effects.resizeEffect == .none && effects.moveEffect == .auroraVeil)
+        expect("No Effect disables resizing visuals independently", !effects.effectsEnabled(for: .resize(.topLeft)) && effects.effectsEnabled(for: .move))
+        let oldChoices = MemoryDefaults()
+        oldChoices.set(WindowEffect.furiousLightning.rawValue, forKey: PreferenceKey.resizeEffect.rawValue)
+        oldChoices.set(false, forKey: "windowResizer.resizeEffectsEnabled")
+        expect("An old unchecked switch migrates to No Effect", PreferenceStore(defaults: oldChoices).gesture.resizeEffect == .none)
+        expect("Legacy effect switches are removed after migration", oldChoices.object(forKey: "windowResizer.resizeEffectsEnabled") == nil)
+        p.set("unknown-effect", for: .resizeEffect)
+        p.set(WindowEffect.furiousLightning.rawValue, for: .moveEffect)
+        expect("Unknown and wrong-gesture effects use safe defaults", p.gesture.resizeEffect == .iridescentEnergy && p.gesture.moveEffect == .blueMist)
         expect("Stored threshold clamped", p.int(.moveThreshold) == 30)
         expect("Wrong type restored", p.bool(.enabled))
         expect("Unknown activation restored", p.string(.activation) == "immediate")
@@ -183,7 +288,24 @@ import CoreGraphics
         expect("Menu bar icon preference persists", !PreferenceStore(defaults: defaults).bool(.showMenuBarIcon))
         p.set(true, for: .suspended); p.set(false, for: .enabled); p.resetWindow()
         expect("Utility reset preserves suspension", p.bool(.suspended) && p.bool(.enabled))
+        expect("Utility reset restores shared edge size", p.gesture.edgeZoneSize == 200)
+        expect("Utility reset restores both effect choices", p.gesture.resizeEffect == .iridescentEnergy && p.gesture.moveEffect == .blueMist && !p.gesture.normalWindowEffects)
         expect("Window reset preserves menu bar choice", !p.bool(.showMenuBarIcon))
+        expect("Static effects default off", p.staticEffect == .none)
+        p.set(StaticEffect.fireflies.rawValue, for: .staticEffect)
+        p.set(77, for: .fireflyAmount); p.set(21, for: .rainAmount)
+        let saved = PreferenceStore(defaults: defaults)
+        expect("Static effect choice and independent options persist", saved.staticEffect == .fireflies && saved.int(.fireflyAmount) == 77 && saved.int(.rainAmount) == 21)
+        p.resetWindow()
+        expect("Window reset preserves Static settings", p.staticEffect == .fireflies && p.int(.fireflyAmount) == 77)
+        defaults.set("snowfall", forKey: PreferenceKey.staticEffect.rawValue)
+        let upgraded = PreferenceStore(defaults: defaults)
+        expect("Retired Snowfall selections upgrade to Snow Storm", upgraded.staticEffect == .snowStorm &&
+               defaults.string(forKey: PreferenceKey.staticEffect.rawValue) == StaticEffect.snowStorm.rawValue)
+        p.set("unknown-effect", for: .staticEffect)
+        expect("Unknown Static effect safely disables decoration", p.staticEffect == .none)
+        p.set(900, for: .fireflySpeed); p.set(-5, for: .rainSize); p.set(true, for: .fireflyAmount)
+        expect("Static options normalize bounds and types", p.int(.fireflySpeed) == 100 && p.int(.rainSize) == 1 && p.int(.fireflyAmount) == 50)
         p.finishAssistant(skipped: true); p.resetAll()
         expect("Reset all restores defaults", !p.bool(.suspended) && p.bool(.moveEnabled) && p.int(.moveThreshold) == 5)
         expect("Reset all preserves assistant disposition", !p.needsAssistant)

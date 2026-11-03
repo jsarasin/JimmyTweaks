@@ -30,6 +30,7 @@ struct GestureFeedback {
     var sampleTime: TimeInterval = ProcessInfo.processInfo.systemUptime
     var idle = false
     var dismissing = false
+    var passive = false
 }
 
 private final class FeedbackPanel: NSPanel {
@@ -92,12 +93,20 @@ private final class DisplayFeedback {
 private struct DissolvingFeedback {
     static let smokeFadeDuration: TimeInterval = 1.0
     static let colourTransitionDuration = smokeFadeDuration / 3
-    static let duration = colourTransitionDuration + smokeFadeDuration
+    var duration: TimeInterval {
+        switch effect {
+        case .cartoonWind: return 2.6
+        case .crystalFrost: return 2.1
+        default: return Self.colourTransitionDuration + Self.smokeFadeDuration
+        }
+    }
     let renderer: ProceduralEffects
     let rect: CGRect
+    let windowRect: CGRect
     let source: CGPoint
     let arms: SIMD2<Float>
     let mist: Bool
+    let effect: WindowEffect
     let motion: EffectMotion
     let started: TimeInterval
     let displays: Set<CGDirectDisplayID>
@@ -117,10 +126,12 @@ final class FeedbackController {
     private var motion = EffectMotion()
     private var previousTick = ProcessInfo.processInfo.systemUptime
     private var effectRect = CGRect.zero
+    private var windowRect = CGRect.zero
     private var source = CGPoint.zero
     private var previousActivationSource: CGPoint?
     private var arms = SIMD2<Float>.zero
     private var mist = false
+    private var effect: WindowEffect = .iridescentEnergy
     private var animating = false
     private var liveEffectVisible = false
     private var dissolving: [DissolvingFeedback] = []
@@ -155,13 +166,16 @@ final class FeedbackController {
         // It must not erase a smoke transition that is already in progress.
         if feedback == nil, latest == nil, !dissolving.isEmpty { return }
         guard let feedback, WindowGeometry.valid(feedback.frame) else { clear(); return }
-        let changed = latest?.window != feedback.window || latest?.kind != feedback.kind || latest == nil
+        if feedback.passive && (!feedback.preferences.normalWindowEffectsActive || reducedMotion()) { clear(); return }
+        let changed = latest?.window != feedback.window || latest?.kind != feedback.kind || latest == nil ||
+            latest?.preferences.effect(for: feedback.kind) != feedback.preferences.effect(for: feedback.kind)
         if changed {
             retireCurrentEffect()
             motion = EffectMotion(); renderer?.restart(); visitedDisplays.removeAll(); previousActivationSource = nil
         }
         latest = feedback
-        if feedback.preferences.changeCursor && !feedback.idle {
+        effect = feedback.preferences.effect(for: feedback.kind)
+        if feedback.preferences.changeCursor && !feedback.idle && !feedback.passive {
             let name: String
             let cursor: NSCursor
             switch feedback.kind {
@@ -175,22 +189,30 @@ final class FeedbackController {
         // Window geometry is Quartz top-left; the overlay desktop uses AppKit bottom-left.
         let mainHeight = CGDisplayBounds(CGMainDisplayID()).height
         let frame = NSRect(x: feedback.frame.minX, y: mainHeight - feedback.frame.maxY, width: feedback.frame.width, height: feedback.frame.height)
+        windowRect = frame
         let corner: WindowCorner?
-        if feedback.preferences.cornerHints, case .resize(let c) = feedback.kind { corner = c } else { corner = nil }
-        mist = (feedback.active || feedback.idle) && feedback.kind == .move
+        // Hover can change the cursor, but only an admitted resize may start visuals.
+        // Idle feedback is produced only after a real gesture has already begun.
+        if (feedback.preferences.cornerHints || feedback.passive), feedback.active || feedback.idle,
+           case .resize(let c) = feedback.kind { corner = c } else { corner = nil }
+        mist = (feedback.active || feedback.idle) && feedback.kind == .move && feedback.preferences.effectsEnabled(for: .move)
         if let corner {
             source = CGPoint(x: corner.isLeft ? frame.minX : frame.maxX, y: corner.isTop ? frame.maxY : frame.minY)
             arms = SIMD2(corner.isLeft ? 1 : -1, corner.isTop ? -1 : 1)
             // The heat field stays fixed across the whole desktop. Moving the source must
             // never move a simulation boundary through its existing flame trail.
             effectRect = NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) }
-        } else { source = CGPoint(x: frame.midX, y: frame.midY); arms = .zero; effectRect = frame }
+        } else {
+            source = CGPoint(x: frame.midX, y: frame.midY); arms = .zero
+            effectRect = mist && effect == .cartoonWind ? NSScreen.screens.reduce(CGRect.null) { $0.union($1.frame) } : frame
+        }
         motion.sample(source, at: feedback.sampleTime)
-        let wantsAnimation = feedback.preferences.animatedEffects && !reducedMotion() && (corner != nil || mist)
-        if !feedback.preferences.animatedEffects || reducedMotion() { dissolving.removeAll() }
+        let effectsEnabled = feedback.preferences.effectsEnabled(for: feedback.kind)
+        let wantsAnimation = effectsEnabled && feedback.preferences.animatedEffects && !reducedMotion() && (corner != nil || mist)
+        if !effectsEnabled || !feedback.preferences.animatedEffects || reducedMotion() { dissolving.removeAll() }
         if wantsAnimation { prepareRenderer() }
         let canAnimate = wantsAnimation && renderer != nil && !rendererFailed
-        let showFrame = (feedback.active || feedback.idle) && (feedback.preferences.outline || (mist && !canAnimate))
+        let showFrame = !feedback.passive && (feedback.active || feedback.idle) && (feedback.preferences.outline || (mist && !canAnimate))
         guard corner != nil || mist || showFrame || !dissolving.isEmpty else { liveEffectVisible = false; hideDisplays(); return }
         liveEffectVisible = canAnimate
         animating = canAnimate || !dissolving.isEmpty
@@ -198,10 +220,13 @@ final class FeedbackController {
         // This rectangle only decides when to first activate a display. It never clips
         // rendering or heat; visited displays stay active until the gesture ends.
         var activationRect = frame
+        if mist && effect == .cartoonWind { activationRect = frame.insetBy(dx: -900, dy: -600) }
         if corner != nil {
-            activationRect = activationRect.union(CGRect(x: source.x - 288, y: source.y - 288, width: 576, height: 576))
+            if effect == .furiousLightning { activationRect = frame.insetBy(dx: -560, dy: -560) }
+            let reach: CGFloat = effect == .furiousLightning ? 620 : effect == .crystalFrost ? 420 : 288
+            activationRect = activationRect.union(CGRect(x: source.x - reach, y: source.y - reach, width: reach * 2, height: reach * 2))
             if let previous = previousActivationSource {
-                activationRect = activationRect.union(CGRect(x: previous.x - 288, y: previous.y - 288, width: 576, height: 576))
+                activationRect = activationRect.union(CGRect(x: previous.x - reach, y: previous.y - reach, width: reach * 2, height: reach * 2))
             }
         }
         previousActivationSource = source
@@ -212,10 +237,10 @@ final class FeedbackController {
             let intersection = visualRect.intersection(screen.frame)
             let intersects = !intersection.isNull && !intersection.isEmpty
             let smokeHere = dissolving.contains { $0.displays.contains(id) }
-            guard intersects || (canAnimate && !mist && visitedDisplays.contains(id)) || smokeHere else { continue }
+            guard intersects || (canAnimate && (!mist || effect == .cartoonWind) && visitedDisplays.contains(id)) || smokeHere else { continue }
             let fragment = intersects ? intersection : screen.frame
             used.insert(id)
-            if canAnimate && !mist { visitedDisplays.insert(id) }
+            if canAnimate && (!mist || effect == .cartoonWind) { visitedDisplays.insert(id) }
             let display = displays[id] ?? DisplayFeedback(screen: screen); displays[id] = display
             if display.panel.frame != screen.frame { display.panel.setFrame(screen.frame, display: false) }
             let local = fragment.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
@@ -260,14 +285,14 @@ final class FeedbackController {
         guard liveEffectVisible, let renderer, renderer.frameCount > 0,
               latest?.preferences.animatedEffects == true, !reducedMotion() else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        dissolving.removeAll { now - $0.started >= DissolvingFeedback.duration }
+        dissolving.removeAll { now - $0.started >= $0.duration }
         if dissolving.isEmpty { previousSmokeCursor = cursorPosition() }
         // Observation is polled separately; fading panels never receive or consume input.
         for display in displays.values {
             display.panel.ignoresMouseEvents = true
             display.panel.acceptsMouseMovedEvents = false
         }
-        dissolving.append(DissolvingFeedback(renderer: renderer, rect: effectRect, source: source, arms: arms, mist: mist,
+        dissolving.append(DissolvingFeedback(renderer: renderer, rect: effectRect, windowRect: windowRect, source: source, arms: arms, mist: mist, effect: effect,
             motion: motion, started: now, displays: Set(displays.compactMap { $0.value.panel.isVisible ? $0.key : nil })))
         // Bound memory and GPU work even if inputs alternate faster than display refresh.
         if dissolving.count > 4 { dissolving.removeFirst(dissolving.count - 4) }
@@ -307,7 +332,7 @@ final class FeedbackController {
         guard animating else { return }
         let now = ProcessInfo.processInfo.systemUptime
         motion.settle(at: now, dt: Float(min(1 / 30.0, max(0, now - previousTick)))); previousTick = now
-        dissolving.removeAll { now - $0.started >= DissolvingFeedback.duration }
+        dissolving.removeAll { now - $0.started >= $0.duration }
         var layers: [ProceduralEffects] = []
         var cursorStroke: SmokeCursorStroke?
         if !dissolving.isEmpty {
@@ -321,13 +346,13 @@ final class FeedbackController {
             previousSmokeCursor = current
         } else { previousSmokeCursor = nil }
         for smoke in dissolving {
-            let progress = Float((now - smoke.started) / DissolvingFeedback.duration)
-            if smoke.renderer.configure(rect: smoke.rect, source: smoke.source, arms: smoke.arms, mist: smoke.mist, motion: smoke.motion, smoke: progress, cursor: cursorStroke) {
+            let progress = Float((now - smoke.started) / smoke.duration)
+            if smoke.renderer.configure(rect: smoke.rect, source: smoke.source, arms: smoke.arms, mist: smoke.mist, motion: smoke.motion, smoke: progress, cursor: cursorStroke, effect: smoke.effect, windowRect: smoke.windowRect) {
                 layers.append(smoke.renderer)
             }
         }
         if liveEffectVisible, let renderer {
-            guard renderer.configure(rect: effectRect, source: source, arms: arms, mist: mist, motion: motion) else {
+            guard renderer.configure(rect: effectRect, source: source, arms: arms, mist: mist, motion: motion, effect: effect, windowRect: windowRect) else {
                 rendererFailed = true; dissolving.removeAll(); stopClock(); refresh(); return
             }
             layers.append(renderer)

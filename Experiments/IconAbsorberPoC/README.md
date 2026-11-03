@@ -35,7 +35,7 @@ reference it. The probe is a separate executable and bundle, not a production he
 The inspected application targets macOS 27.0 and arm64, uses Swift 5 language mode,
 AppKit, a single executable, Hardened Runtime, and no App Sandbox. Development
 builds are ad-hoc signed. `AppDelegate` constructs a shared `SettingsContext` and
-`RuntimeCoordinator`; the latter manages Window Resizer/Window Mover permissions,
+`RuntimeCoordinator`; the latter manages Window Move & Resize permissions,
 session state, retry budgets and shutdown. Settings pages are native view
 controllers. Preferences use typed keys, local UserDefaults and change
 notifications. There is no general plug-in/module registry to extend blindly.

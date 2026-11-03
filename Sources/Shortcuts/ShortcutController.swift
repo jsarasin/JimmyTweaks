@@ -12,7 +12,7 @@ private func shortcutPassiveCallback(proxy: CGEventTapProxy, type: CGEventType, 
     return Unmanaged.passUnretained(event)
 }
 
-/// Main-run-loop router shared with Window Resizer's active tap. Only passive observation
+/// Main-run-loop router shared with Window Move & Resize's active tap. Only passive observation
 /// installs another tap; no shortcut action executes inside either event callback.
 final class ShortcutController {
     let registry = ShortcutActionRegistry()

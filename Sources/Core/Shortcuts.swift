@@ -57,7 +57,7 @@ enum ShortcutConflictChecker {
         if combination.needsTransparent && shortcut.mode == .absorbing { return "Unmodified left and right clicks require Transparent mode. Choose Transparent or record another combination." }
         if let other = shortcuts.first(where: { $0.id != shortcut.id && $0.combination == combination }) { return "Already assigned to “\(other.name)”." }
         if gestures.enabled && combination.input == .mouse && combination.modifiers == ShortcutCombination.command && ((combination.code == 0 && gestures.moveEnabled) || (combination.code == 1 && gestures.resizeEnabled)) {
-            return "Conflicts with Window Resizer’s Command + \(combination.code == 0 ? "left" : "right") mouse gesture. Disable that gesture or choose another combination."
+            return "Conflicts with Window Move & Resize’s Command + \(combination.code == 0 ? "left" : "right") mouse gesture. Disable that gesture or choose another combination."
         }
         if shortcut.scope.applicationBundleID != nil { return "Application-specific shortcuts are not supported yet." }
         return nil

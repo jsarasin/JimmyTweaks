@@ -1,16 +1,20 @@
 import AppKit
 
-// Compile together with Sources/App/BrandIcon.swift.
+// Render the source artwork at every macOS icon size.
 @main
 struct MakeIcon {
     static func main() throws {
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        let artworkURL = URL(fileURLWithPath: CommandLine.arguments[2])
+        guard let artwork = NSImage(contentsOf: artworkURL) else {
+            throw NSError(domain: "MakeIcon", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Cannot read \(artworkURL.path)"])
+        }
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var bitmaps: [Int: Data] = [:]
         for size in [16, 32, 128, 256, 512] {
             for scale in [1, 2] {
                 let pixels = size * scale
-                let image = BrandIcon.applicationImage(size: CGFloat(pixels))
                 let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
                                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                                               isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
@@ -18,7 +22,8 @@ struct MakeIcon {
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
                 NSGraphicsContext.current?.cgContext.clear(NSRect(x: 0, y: 0, width: pixels, height: pixels))
-                image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels))
+                artwork.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels),
+                             from: .zero, operation: .copy, fraction: 1)
                 NSGraphicsContext.restoreGraphicsState()
                 let name = "icon_\(size)x\(size)\(scale == 2 ? "@2x" : "").png"
                 let data = bitmap.representation(using: .png, properties: [:])!

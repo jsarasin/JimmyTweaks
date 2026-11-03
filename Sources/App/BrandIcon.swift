@@ -1,30 +1,29 @@
 import AppKit
 
-/// The same hand-drawn blackletter J is used in the application and menu bar.
-/// Keeping the outline independent of fonts also makes builds reproducible.
+/// The application artwork is a carved, living-wood J. This simplified outline
+/// keeps the same curled silhouette legible at menu bar size.
 enum BrandIcon {
     static var letter: CGPath {
         let path = CGMutablePath()
-        path.move(to: CGPoint(x: 112, y: 658))
-        path.addLine(to: CGPoint(x: 190, y: 730))
-        path.addLine(to: CGPoint(x: 355, y: 691))
-        path.addLine(to: CGPoint(x: 510, y: 738))
-        path.addLine(to: CGPoint(x: 468, y: 642))
-        path.addLine(to: CGPoint(x: 418, y: 618))
-        path.addLine(to: CGPoint(x: 418, y: 265))
-        path.addCurve(to: CGPoint(x: 231, y: 53), control1: CGPoint(x: 418, y: 154), control2: CGPoint(x: 336, y: 84))
-        path.addCurve(to: CGPoint(x: 67, y: 179), control1: CGPoint(x: 147, y: 68), control2: CGPoint(x: 84, y: 113))
-        path.addLine(to: CGPoint(x: 59, y: 222))
-        path.addLine(to: CGPoint(x: 137, y: 295))
-        path.addLine(to: CGPoint(x: 215, y: 220))
-        path.addLine(to: CGPoint(x: 158, y: 163))
-        path.addCurve(to: CGPoint(x: 237, y: 129), control1: CGPoint(x: 177, y: 140), control2: CGPoint(x: 207, y: 130))
-        path.addCurve(to: CGPoint(x: 299, y: 255), control1: CGPoint(x: 281, y: 146), control2: CGPoint(x: 299, y: 193))
-        path.addLine(to: CGPoint(x: 299, y: 605))
-        path.addLine(to: CGPoint(x: 188, y: 633))
-        path.addLine(to: CGPoint(x: 112, y: 607))
-        path.addLine(to: CGPoint(x: 144, y: 655))
-        path.closeSubpath()
+
+        let crown = CGMutablePath()
+        crown.move(to: CGPoint(x: 297, y: 753))
+        crown.addCurve(to: CGPoint(x: 762, y: 753),
+                       control1: CGPoint(x: 435, y: 793), control2: CGPoint(x: 642, y: 788))
+        path.addPath(crown.copy(strokingWithWidth: 96, lineCap: .round, lineJoin: .round,
+                               miterLimit: 2))
+
+        let trunk = CGMutablePath()
+        trunk.move(to: CGPoint(x: 627, y: 748))
+        trunk.addLine(to: CGPoint(x: 627, y: 294))
+        trunk.addCurve(to: CGPoint(x: 392, y: 154),
+                       control1: CGPoint(x: 627, y: 160), control2: CGPoint(x: 506, y: 109))
+        trunk.addCurve(to: CGPoint(x: 284, y: 362),
+                       control1: CGPoint(x: 265, y: 199), control2: CGPoint(x: 233, y: 306))
+        trunk.addCurve(to: CGPoint(x: 372, y: 329),
+                       control1: CGPoint(x: 316, y: 407), control2: CGPoint(x: 384, y: 391))
+        path.addPath(trunk.copy(strokingWithWidth: 105, lineCap: .round, lineJoin: .round,
+                               miterLimit: 2))
         return path
     }
 
@@ -44,28 +43,22 @@ enum BrandIcon {
         context.restoreGState()
     }
 
+    private static let bundledArtwork = Bundle.main.url(forResource: "AppIcon", withExtension: "png")
+        .flatMap(NSImage.init(contentsOf:))
+
     static func applicationImage(size: CGFloat) -> NSImage {
-        NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            context.saveGState()
-            context.scaleBy(x: size / 1024, y: size / 1024)
-            let tile = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824),
-                                    xRadius: 184, yRadius: 184)
-            context.saveGState()
-            // Quartz shadows use device space, unlike the scaled outline.
-            context.setShadow(offset: CGSize(width: 0, height: -12 * size / 1024), blur: 20 * size / 1024,
-                              color: NSColor.black.withAlphaComponent(0.22).cgColor)
-            NSColor(calibratedWhite: 0.15, alpha: 1).setFill()
-            tile.fill()
-            context.restoreGState()
-            NSGradient(starting: NSColor(calibratedWhite: 0.23, alpha: 1),
-                       ending: NSColor(calibratedWhite: 0.115, alpha: 1))!.draw(in: tile, angle: -90)
-            NSColor.white.withAlphaComponent(0.12).setStroke()
-            tile.lineWidth = 2
-            tile.stroke()
-            drawLetter(in: NSRect(x: 300, y: 242, width: 424, height: 552),
-                       color: NSColor(calibratedRed: 0.95, green: 0.93, blue: 0.88, alpha: 1))
-            context.restoreGState()
+        NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            if let bundledArtwork {
+                bundledArtwork.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            } else {
+                // Keep the settings guide usable when run outside the app bundle.
+                let tile = NSBezierPath(roundedRect: rect.insetBy(dx: size * 0.04, dy: size * 0.04),
+                                        xRadius: size * 0.22, yRadius: size * 0.22)
+                NSColor(calibratedRed: 0.02, green: 0.28, blue: 0.13, alpha: 1).setFill()
+                tile.fill()
+                drawLetter(in: rect.insetBy(dx: size * 0.22, dy: size * 0.17),
+                           color: NSColor(calibratedRed: 0.68, green: 0.42, blue: 0.18, alpha: 1))
+            }
             return true
         }
     }
@@ -76,7 +69,7 @@ enum BrandIcon {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Jimmy Tweaks — gothic J"
+        image.accessibilityDescription = "Jimmy Tweaks — Celtic J"
         return image
     }
 }

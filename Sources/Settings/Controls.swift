@@ -243,7 +243,7 @@ class SettingsPageController: NSViewController {
         metadata(button, id: "\(page.rawValue).permissions.\(permission.rawValue)", label: title, description: "Review \(permission.title) in Permissions.", keywords: ["permission", "access", permission.title], section: "Permissions")
         return button
     }
-    @discardableResult func toggle(_ title: String, key: PreferenceKey, id: String, description: String, keywords: [String], section: String, to parent: NSStackView, enabled: @escaping () -> Bool = { true }, unavailable: String = "Enable Window Resizer first.") -> ActionButton {
+    @discardableResult func toggle(_ title: String, key: PreferenceKey, id: String, description: String, keywords: [String], section: String, to parent: NSStackView, enabled: @escaping () -> Bool = { true }, unavailable: String = "Enable Window Move & Resize first.") -> ActionButton {
         let prefs = context.preferences
         let button = ActionButton(title) {}; button.setButtonType(.switch); button.bezelStyle = .regularSquare
         button.handler = { [weak button] in prefs.set(button?.state == .on, for: key) }
@@ -258,9 +258,9 @@ class SettingsPageController: NSViewController {
         let editor = NumericEditor(value: prefs.int(key), range: key.range!) { prefs.set($0, for: key) }
         let name = UI.label(title); name.setContentHuggingPriority(.defaultLow, for: .horizontal)
         add(UI.horizontal([name, NSView(), editor]), to: parent); add(UI.caption(description), to: parent)
-        let keywords = key == .cornerSize ? ["points", "corner", "hit area", "size"] : ["points", "distance", "five", "5", "drag", "threshold"] + (key == .moveThreshold ? ["move", "moving", "left drag", "Command"] : ["resize", "resizing", "right click", "Command"])
+        let keywords = key == .edgeZoneSize ? ["points", "edge", "corner size", "hit area", "size", "boundary", "shared", "resize", "move", "centre"] : ["points", "distance", "five", "5", "drag", "threshold"] + (key == .moveThreshold ? ["move", "moving", "left drag", "Command"] : ["resize", "resizing", "right click", "Command"])
         metadata(editor.field, id: id, label: title, description: description, keywords: keywords, section: section,
-                 unavailable: "Enable the related gesture and threshold activation to edit this value.", value: { "\(prefs.int(key)) points" })
+                 unavailable: key == .edgeZoneSize ? "Enable Window Move & Resize and at least one gesture to edit this value." : "Enable the related gesture and threshold activation to edit this value.", value: { "\(prefs.int(key)) points" })
         metadata(editor.stepper, id: id + ".stepper", label: "Adjust \(title)", description: description, keywords: ["increase", "decrease", "points"], section: section)
         refreshers.append { [weak editor] in editor?.refresh(value: prefs.int(key), enabled: enabled(), resetRevision: prefs.resetRevision) }
     }
