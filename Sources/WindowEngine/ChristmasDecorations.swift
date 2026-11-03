@@ -213,7 +213,7 @@ struct ChristmasScene {
     }
     static func roofVisible(on target: SnowStormWindow, in windows: [SnowStormWindow],
                             fractions: [Double]) -> Bool {
-        guard let index = windows.firstIndex(where: { $0.id == target.id }), index > 0 else { return false }
+        guard let index = windows.firstIndex(where: { $0.id == target.id }) else { return false }
         let roofY = target.frame.maxY + 3
         return !windows.prefix(index).contains { front in
             fractions.contains { front.frame.contains(CGPoint(x: target.frame.minX + target.frame.width * $0, y: roofY)) }
@@ -1098,25 +1098,71 @@ enum ChristmasDrawing {
         }
     }
     private static func northPoleSign(_ c: CGContext, x: Double, y: Double, style: Int) {
-        let direction = style % 2 == 0 ? 1.0 : -1.0
-        let labels = ["NORTH POLE", "TOY SHOP", "HOT COCOA", "SANTA WAY"]
-        fill(c, NSColor(calibratedRed: 0.35, green: 0.18, blue: 0.08, alpha: 1))
-        c.fill(CGRect(x: x - 2, y: y, width: 4, height: 32 + Double(style % 3) * 3))
-        let board = CGMutablePath()
-        board.move(to: CGPoint(x: x - direction * 27, y: y + 19))
-        board.addLine(to: CGPoint(x: x + direction * 17, y: y + 19))
-        board.addLine(to: CGPoint(x: x + direction * 28, y: y + 25))
-        board.addLine(to: CGPoint(x: x + direction * 17, y: y + 31))
-        board.addLine(to: CGPoint(x: x - direction * 27, y: y + 31))
-        board.closeSubpath()
-        fill(c, NSColor(calibratedRed: 0.50, green: 0.24, blue: 0.10, alpha: 1))
-        c.addPath(board); c.fillPath()
-        stroke(c, NSColor(calibratedRed: 0.95, green: 0.83, blue: 0.57, alpha: 1), 1)
-        c.addPath(board); c.strokePath()
-        (labels[style % labels.count] as NSString).draw(in: CGRect(x: x - 24, y: y + 21, width: 43, height: 9),
-                                        withAttributes: [.font: NSFont.boldSystemFont(ofSize: 6.2),
-                                                         .foregroundColor: NSColor.white])
-        fill(c, .white); c.fillEllipse(in: CGRect(x: x - 1, y: y + 32, width: 2, height: 2))
+        let wood = NSColor(calibratedRed: 0.34, green: 0.14, blue: 0.065, alpha: 1)
+        let darkWood = NSColor(calibratedRed: 0.15, green: 0.065, blue: 0.04, alpha: 1)
+        let gold = NSColor(calibratedRed: 0.96, green: 0.72, blue: 0.29, alpha: 1)
+        let cream = NSColor(calibratedRed: 1, green: 0.94, blue: 0.74, alpha: 1)
+        let paint = [
+            NSColor(calibratedRed: 0.08, green: 0.30, blue: 0.19, alpha: 1),
+            NSColor(calibratedRed: 0.47, green: 0.11, blue: 0.12, alpha: 1),
+            NSColor(calibratedRed: 0.12, green: 0.25, blue: 0.35, alpha: 1),
+            NSColor(calibratedRed: 0.27, green: 0.16, blue: 0.31, alpha: 1)
+        ][style % 4]
+        fill(c, darkWood)
+        c.fill(CGRect(x: x - 4, y: y, width: 8, height: 53))
+        fill(c, wood)
+        c.fill(CGRect(x: x - 2.5, y: y + 2, width: 5, height: 50))
+        for stripe in 0..<4 {
+            fill(c, stripe.isMultiple(of: 2) ? cream : .systemRed)
+            c.fill(CGRect(x: x - 3, y: y + 2 + Double(stripe) * 4, width: 6, height: 2))
+        }
+        fill(c, darkWood)
+        c.fill(CGRect(x: x - 8, y: y, width: 16, height: 2))
+
+        func plaque(_ inset: Double, bottom: Double, top: Double) -> CGPath {
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: x - 31 + inset, y: y + bottom))
+            path.addLine(to: CGPoint(x: x + 31 - inset, y: y + bottom))
+            path.addLine(to: CGPoint(x: x + 37 - inset, y: y + bottom + 6))
+            path.addLine(to: CGPoint(x: x + 37 - inset, y: y + top - 6))
+            path.addLine(to: CGPoint(x: x + 31 - inset, y: y + top))
+            path.addLine(to: CGPoint(x: x - 31 + inset, y: y + top))
+            path.addLine(to: CGPoint(x: x - 37 + inset, y: y + top - 6))
+            path.addLine(to: CGPoint(x: x - 37 + inset, y: y + bottom + 6))
+            path.closeSubpath()
+            return path
+        }
+        fill(c, darkWood); c.addPath(plaque(0, bottom: 18, top: 52)); c.fillPath()
+        fill(c, gold); c.addPath(plaque(2, bottom: 20, top: 50)); c.fillPath()
+        fill(c, paint); c.addPath(plaque(4, bottom: 22, top: 48)); c.fillPath()
+        stroke(c, cream, 0.7); c.addPath(plaque(5.5, bottom: 23.5, top: 46.5)); c.strokePath()
+
+        // The two lines are measured separately so both are truly centered.
+        let font = NSFont(name: "Georgia-Bold", size: 8.5) ?? NSFont.boldSystemFont(ofSize: 8.5)
+        let lettering: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: cream]
+        for (word, baseline) in [("North", 35.0), ("Pole", 25.0)] {
+            let label = word as NSString
+            label.draw(at: CGPoint(x: x - label.size(withAttributes: lettering).width / 2,
+                                   y: y + baseline), withAttributes: lettering)
+        }
+        for side in [-1.0, 1.0] {
+            let center = x + side * 30
+            fill(c, gold)
+            c.fillEllipse(in: CGRect(x: center - 1.5, y: y + 33, width: 3, height: 3))
+            c.fillEllipse(in: CGRect(x: center - 1, y: y + 23, width: 2, height: 2))
+            c.fillEllipse(in: CGRect(x: center - 1, y: y + 46, width: 2, height: 2))
+        }
+        let snowCap = CGMutablePath()
+        snowCap.move(to: CGPoint(x: x - 31, y: y + 52))
+        snowCap.addQuadCurve(to: CGPoint(x: x - 18, y: y + 54), control: CGPoint(x: x - 26, y: y + 55))
+        snowCap.addQuadCurve(to: CGPoint(x: x - 3, y: y + 53), control: CGPoint(x: x - 10, y: y + 52))
+        snowCap.addQuadCurve(to: CGPoint(x: x + 14, y: y + 55), control: CGPoint(x: x + 4, y: y + 56))
+        snowCap.addQuadCurve(to: CGPoint(x: x + 31, y: y + 52), control: CGPoint(x: x + 24, y: y + 53))
+        snowCap.closeSubpath()
+        fill(c, NSColor(calibratedRed: 0.82, green: 0.92, blue: 0.96, alpha: 1))
+        c.addPath(snowCap); c.fillPath()
+        fill(c, .white)
+        c.fillEllipse(in: CGRect(x: x - 2, y: y + 54, width: 4, height: 4))
     }
     private static func mistletoe(_ c: CGContext, x: Double, y: Double, style: Int) {
         stroke(c, NSColor(calibratedRed: 0.22, green: 0.42, blue: 0.18, alpha: 1), 1.5)
@@ -1263,8 +1309,7 @@ enum ChristmasDrawing {
         guard let visit = SantaVisitPose.at(phase, target: target, screen: screen) else { return }
         let x = visit.sleigh.x, y = visit.sleigh.y
         c.saveGState(); c.translateBy(x: -origin.x, y: -origin.y)
-        // The snow field is ordered directly below the frontmost window, so
-        // Santa appears above the others without a second Santa in a roof strip.
+        // Santa is drawn once in a temporary layer anchored above the chimney window.
         ChristmasPixels.draw(ChristmasPixels.sleigh, in: c, x: x - 27, y: y - 4)
         var deer: [CGPoint] = []
         let flying = phase < 8.5 || visit.stage == .departing

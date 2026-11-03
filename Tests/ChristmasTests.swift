@@ -179,6 +179,10 @@ enum ChristmasTests {
         check(eve.chimneys.count == 1 && eve.target == eve.chimneys.first && eve.santa == .automatic,
               "Christmas Eve uses one chimney for repeating Santa visits")
         check(eve.target != windows.first?.id, "Santa chooses a chimney below the frontmost window")
+        let frontmostOnly = ChristmasScene(season: .eve, windows: [windows[0]], screens: [screen], seed: 107)
+        check(frontmostOnly.target == windows[0].id &&
+              ChristmasScene.landingVisible(on: windows[0], in: [windows[0]]),
+              "An exposed chimney on the frontmost window remains a valid Santa destination")
         if let target = windows.first(where: { $0.id == eve.target }) {
             let first = SantaVisitPose.at(0, target: target, screen: screen)!
             let early = SantaVisitPose.at(2.5, target: target, screen: screen)!
@@ -354,6 +358,25 @@ enum ChristmasTests {
             check(ids.firstIndex(of: firstStrip.windowNumber)! < ids.firstIndex(of: first.windowNumber)! &&
                   ids.firstIndex(of: first.windowNumber)! < ids.firstIndex(of: secondStrip.windowNumber)!,
                   "Changing focus immediately raises the newly focused lights and keeps the old strip behind")
+            second.orderFrontRegardless()
+            let frontmostSanta = SnowStormController(settings: SnowStormSettings(),
+                screens: { [StaticEffectScreen(id: 1, frame: display.frame)] }, cursor: { nil },
+                query: { _, _ in [] }, automaticTicks: false, currentDate: { date(23) },
+                holidayCalendar: calendar, holidaySeed: 107)
+            defer { frontmostSanta.shutdown() }
+            frontmostSanta.advanceForTesting(dt: 1.0 / 30, windows: [secondWindow], cursor: nil)
+            frontmostSanta.triggerSanta()
+            let santaLayer = frontmostSanta.santaPanelsForTesting.first
+            ids = orderedIDs()
+            let santaAboveFrontmost = santaLayer.flatMap { layer -> Bool? in
+                guard let santaIndex = ids.firstIndex(of: layer.windowNumber),
+                      let windowIndex = ids.firstIndex(of: second.windowNumber) else { return nil }
+                return santaIndex < windowIndex
+            } == true
+            check(frontmostSanta.christmas.target == secondWindow.id &&
+                  ids.firstIndex(of: second.windowNumber)! < ids.firstIndex(of: first.windowNumber)! &&
+                  santaAboveFrontmost,
+                  "Santa's flight layer stays above the frontmost chimney window")
         }
         today = date(24); controller.advanceForTesting(dt: 1.0 / 30, windows: windows, cursor: nil)
         check(controller.christmas.season == .eve && controller.christmas.chimneys == [persistentChimney].compactMap { $0 },
@@ -365,8 +388,9 @@ enum ChristmasTests {
         controller.advanceForTesting(dt: 1.0 / 30, windows: windows, cursor: nil)
         check(controller.allPanels.count == 1, "Turning both artwork checkboxes off removes their window strips")
         controller.triggerSanta()
-        check(controller.christmas.santa != .none && controller.christmas.chimneys.count == 1 && controller.allPanels.count == 2,
-              "Manual Santa can start without Decorations or Lights")
+        check(controller.christmas.santa != .none && controller.christmas.chimneys.count == 1 &&
+              controller.allPanels.count == 3 && controller.santaPanelsForTesting.count == 1,
+              "Manual Santa can start without Decorations or Lights and gets one flight layer")
         let firstVisit = controller.christmas.santa
         controller.advanceForTesting(dt: 1, windows: windows, cursor: nil)
         controller.triggerSanta()

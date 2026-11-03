@@ -299,9 +299,17 @@ private final class StormView: NSView {
     var revision: UInt64?
     var holidayFrame: Int?
     var fireplaceFrame: CGRect?
+    var santaOnly = false
     override var isOpaque: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
         guard let simulation, let context = NSGraphicsContext.current?.cgContext else { return }
+        if santaOnly {
+            if let christmas {
+                ChristmasDrawing.santaVisit(scene: christmas, windows: simulation.windows, screen: worldRect,
+                                            time: simulation.time, in: context, origin: worldRect.origin)
+            }
+            return
+        }
         if let driftID {
             if let drift = simulation.drifts.first(where: { $0.id == driftID }) {
                 SnowStormDrawing.drift(drift, in: context, origin: worldRect.origin)
@@ -311,10 +319,6 @@ private final class StormView: NSView {
                 }
             }
         } else {
-            if let christmas, christmas.santa.active {
-                ChristmasDrawing.santaVisit(scene: christmas, windows: simulation.windows, screen: worldRect,
-                    time: simulation.time, in: context, origin: worldRect.origin)
-            }
             if let christmas, christmas.yeti != nil {
                 ChristmasDrawing.yetiVisit(scene: christmas, windows: simulation.windows, screen: worldRect,
                     time: simulation.time, in: context, origin: worldRect.origin)
@@ -351,6 +355,7 @@ final class SnowStormController {
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
     private var screenPanels: [CGDirectDisplayID: NSPanel] = [:]
+    private var santaPanels: [CGDirectDisplayID: NSPanel] = [:]
     private var fieldTargets: [CGDirectDisplayID: UInt64] = [:]
     private var driftPanels: [UInt64: NSPanel] = [:]
     private var stopped = false
@@ -437,7 +442,7 @@ final class SnowStormController {
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor); self.localClickMonitor = nil }
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor); self.globalClickMonitor = nil }
         for panel in allPanels { panel.orderOut(nil) }
-        screenPanels.removeAll(); fieldTargets.removeAll(); driftPanels.removeAll()
+        screenPanels.removeAll(); santaPanels.removeAll(); fieldTargets.removeAll(); driftPanels.removeAll()
         simulation = SnowStormSimulation()
         yeti = nil; consumedCarolers.removeAll(); pendingYetiRequest = false
         fireplace?.shutdown(); fireplace = nil
@@ -453,16 +458,17 @@ final class SnowStormController {
     private func scheduleDecorationReanchor() {
         // Run after AppKit has processed the click that may raise its target.
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.stopped, self.settings.lights || self.settings.decorations else { return }
+            guard let self, !self.stopped,
+                  self.settings.lights || self.settings.decorations || self.christmas.santa.active else { return }
             self.reanchorDecoratedPanels()
         }
     }
     private func reanchorDecoratedPanels() {
-        guard !stopped, !driftPanels.isEmpty else { return }
+        guard !stopped, !driftPanels.isEmpty || !santaPanels.isEmpty else { return }
         let targets = Dictionary(uniqueKeysWithValues: simulation.windows.compactMap { window -> (UInt32, SnowStormWindow)? in
             christmas.decoration(for: window.id) == nil ? nil : (window.id, window)
         })
-        guard !targets.isEmpty,
+        guard !targets.isEmpty || !santaPanels.isEmpty,
               let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return }
         // Rebuild the strip order from the Window Server's current order. A
         // click can raise a window before the next asynchronous geometry sample.
@@ -471,6 +477,10 @@ final class SnowStormController {
                   let target = targets[UInt32(number)],
                   let panel = driftPanels[UInt64(target.id)] else { continue }
             present(panel, target)
+        }
+        if let targetID = christmas.target,
+           let target = simulation.windows.first(where: { $0.id == targetID }) {
+            for panel in santaPanels.values { present(panel, target) }
         }
     }
     private func refreshChristmas(screens displayFrames: [CGRect], force: Bool = false) {
@@ -612,6 +622,9 @@ final class SnowStormController {
         for id in Array(screenPanels.keys) where !ids.contains(id) {
             screenPanels.removeValue(forKey: id)?.orderOut(nil); fieldTargets.removeValue(forKey: id)
         }
+        for id in Array(santaPanels.keys) where !ids.contains(id) {
+            santaPanels.removeValue(forKey: id)?.orderOut(nil)
+        }
         for screen in displays {
             let panel = screenPanels[screen.id] ?? makePanel(frame: screen.frame)
             let isNew = screenPanels[screen.id] == nil
@@ -654,8 +667,23 @@ final class SnowStormController {
                 present(panel, drift.window)
             }
         }
+        let santaTarget = christmas.target.flatMap { id in simulation.windows.first { $0.id == id } }
+        let visiting = christmas.santa.active && christmas.santaPhase(time: simulation.time) < SantaVisitPose.duration
+        for screen in displays {
+            guard visiting, let santaTarget, santaTarget.frame.intersects(screen.frame) else {
+                santaPanels.removeValue(forKey: screen.id)?.orderOut(nil)
+                continue
+            }
+            let isNew = santaPanels[screen.id] == nil
+            let panel = santaPanels[screen.id] ?? makePanel(frame: screen.frame)
+            santaPanels[screen.id] = panel
+            (panel.contentView as? StormView)?.santaOnly = true
+            update(panel, frame: screen.frame, drift: nil)
+            // Re-anchor after the window's decoration strip, including after a focus change.
+            if isNew || orderingChanged { present(panel, santaTarget) }
+        }
     }
-    var allPanels: [NSPanel] { Array(screenPanels.values) + Array(driftPanels.values) + (fireplace?.allPanels ?? []) }
+    var allPanels: [NSPanel] { Array(screenPanels.values) + Array(santaPanels.values) + Array(driftPanels.values) + (fireplace?.allPanels ?? []) }
     #if TESTING
     func advanceForTesting(dt: Double, windows: [SnowStormWindow], cursor: CGPoint?, emit: Bool = false) {
         guard !stopped else { return }
@@ -668,6 +696,7 @@ final class SnowStormController {
     var timerRunningForTesting: Bool { clock != nil }
     var timerIntervalForTesting: TimeInterval? { clock?.timeInterval }
     var fireplaceForTesting: FireplaceController? { fireplace }
+    var santaPanelsForTesting: [NSPanel] { Array(santaPanels.values) }
     func scheduleYetiNowForTesting() { nextYetiTime = simulation.time }
     func reanchorDecoratedPanelsForTesting() { reanchorDecoratedPanels() }
     #endif
