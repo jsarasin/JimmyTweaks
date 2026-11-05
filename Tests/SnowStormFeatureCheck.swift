@@ -92,6 +92,11 @@ import ImageIO
         check(ids.firstIndex(of: b.windowNumber)! < ids.firstIndex(of: field.windowNumber)!, "screen-wide snow falls behind the frontmost window")
         check(ids.firstIndex(of: b.windowNumber)! < ids.firstIndex(of: driftA.windowNumber)! && ids.firstIndex(of: driftA.windowNumber)! < ids.firstIndex(of: a.windowNumber)!, "a front window occludes a back window's snowbank")
         check(ids.firstIndex(of: driftB.windowNumber)! < ids.firstIndex(of: b.windowNumber)!, "each snowbank is immediately above its own window level")
+        b.orderFrontRegardless(); settle()
+        controller.advanceForTesting(dt: 1.0 / 30, windows: windows, cursor: nil); settle()
+        let raised = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { $0[kCGWindowNumber as String] as? Int }
+        check(raised.firstIndex(of: driftB.windowNumber)! < raised.firstIndex(of: b.windowNumber)!,
+              "raising the same foreground window keeps its undecorated snowbank above it")
         a.orderFrontRegardless(); settle()
         controller.advanceForTesting(dt: 1.0 / 60, windows: query(), cursor: nil); settle()
         let reordered = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { $0[kCGWindowNumber as String] as? Int }

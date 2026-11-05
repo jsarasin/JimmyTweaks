@@ -926,6 +926,29 @@ private final class IdleFeedbackWindows: WindowAccessing {
               "No Effect suppresses ordinary moving feedback")
         disabled.resizeEffect = .none
         check(!disabled.normalWindowEffectsActive, "No selected effect leaves no passive observation work")
+
+        let feedback = FeedbackController(reducedMotion: { false })
+        observer.onFeedback = { received.append($0); feedback.show($0) }
+        defer { observer.end(); feedback.clear() }
+        for change in ["animations", "ordinary", "effect"] {
+            current.withValue { $0 = initial }
+            observer.observe(type: .leftMouseDown, point: titlePoint, command: false, allowed: true, preferences: prefs)
+            wait(1) { observer.targetForTesting != nil }
+            current.withValue { $0 = OrdinaryWindowSnapshot(number: initial.number, owner: initial.owner,
+                frame: initial.frame.offsetBy(dx: 30, dy: 10), level: 0) }
+            observer.observe(type: .leftMouseDragged, point: CGPoint(x: titlePoint.x + 30, y: titlePoint.y + 10), command: false, allowed: true, preferences: prefs)
+            wait(3) { feedback.timerRunningForTesting && feedback.effectFramesForTesting > 0 }
+            check(feedback.timerRunningForTesting, "An ordinary moving effect is live before disabling \(change)")
+            var stopped = prefs
+            if change == "animations" { stopped.animatedEffects = false }
+            else if change == "ordinary" { stopped.normalWindowEffects = false }
+            else { stopped.moveEffect = .none }
+            observer.update(stopped)
+            check(received.last?.preferences == stopped && !observer.observingForTesting &&
+                  !feedback.timerRunningForTesting && feedback.smokeCountForTesting == 0 &&
+                  feedback.panelsForTesting.allSatisfy { !$0.isVisible },
+                  "Disabling \(change) immediately removes ordinary feedback without starting a departure")
+        }
     }
 
     private static func ordinaryNativeCheck() {

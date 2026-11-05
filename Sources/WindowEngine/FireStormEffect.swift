@@ -321,22 +321,30 @@ final class FireStormIgnitionSimulation {
         if embers.count >= 140 { spawnRemainder = min(spawnRemainder, 1) }
         // These are the windows the field can visibly cover. Its panel sits
         // behind the frontmost window, so a fire is never lit on that window.
-        let roofs = Array(windows.dropFirst()).filter { $0.level == 0 && $0.frame.width >= 140 && $0.frame.intersects(screen) }
+        let roofs = windows.enumerated().filter {
+            $0.offset > 0 && $0.element.level == 0 && $0.element.frame.width >= 140 && $0.element.frame.intersects(screen)
+        }.sorted { $0.element.frame.maxY > $1.element.frame.maxY }
         var survivors: [Ember] = []
         survivors.reserveCapacity(embers.count)
         for var ember in embers {
             let old = ember.position
             ember.position.x += ember.velocity.dx * dt
             ember.position.y += ember.velocity.dy * dt
-            if let roof = roofs.first(where: {
-                let top = $0.frame.maxY
-                return old.y >= top && ember.position.y <= top &&
-                    ember.position.x >= $0.frame.minX + 12 && ember.position.x <= $0.frame.maxX - 12
-            }) {
+            var hit: (window: SnowStormWindow, x: CGFloat)?
+            for (index, roof) in roofs {
+                let top = roof.frame.maxY
+                guard old.y >= top, ember.position.y <= top, old.y > ember.position.y else { continue }
+                let fraction = (old.y - top) / (old.y - ember.position.y)
+                let x = old.x + (ember.position.x - old.x) * fraction
+                guard x >= roof.frame.minX + 12, x <= roof.frame.maxX - 12,
+                      !windows.prefix(index).contains(where: { $0.frame.contains(CGPoint(x: x, y: top + 1)) }) else { continue }
+                hit = (roof, x); break
+            }
+            if let (roof, x) = hit {
                 if random() < configuration.ignitionChance && burns.count < 10 &&
-                    !burns.contains(where: { $0.windowID == roof.id && abs($0.localX - (ember.position.x - roof.frame.minX)) < 80 }) {
+                    !burns.contains(where: { $0.windowID == roof.id && abs($0.localX - (x - roof.frame.minX)) < 80 }) {
                     burns.append(Burn(id: nextID, windowID: roof.id,
-                                      localX: ember.position.x - roof.frame.minX,
+                                      localX: x - roof.frame.minX,
                                       duration: 2.7 + random() * 1.8, age: 0))
                     nextID += 1
                 }
@@ -353,24 +361,48 @@ final class FireStormIgnitionSimulation {
     #endif
 }
 
-/// Reuses the existing click-through screen panels. Only the short-lived
-/// ignition emitters are added, so moving windows do not create more panels.
+private final class FireStormIgnitionPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Small, bounded overlays follow their burning windows. Native window ordering
+/// occludes both existing flames and drifting smoke when another window covers them.
 final class FireStormIgnitions {
+    private final class Overlay {
+        let panel: NSPanel
+        let layer: CAEmitterLayer
+        init(frame: CGRect) {
+            panel = FireStormIgnitionPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+            panel.ignoresMouseEvents = true; panel.acceptsMouseMovedEvents = false
+            panel.hidesOnDeactivate = false; panel.isReleasedWhenClosed = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+            panel.setAccessibilityHidden(true)
+            let view = NSView(frame: CGRect(origin: .zero, size: frame.size))
+            view.wantsLayer = true; view.layer?.masksToBounds = true; view.setAccessibilityHidden(true)
+            panel.contentView = view
+            layer = FireStormLayers.windowFire(in: view.bounds)
+            layer.emitterPosition = CGPoint(x: frame.width / 2, y: 8)
+            view.layer?.addSublayer(layer)
+        }
+        func hide() { panel.orderOut(nil) }
+    }
     private let screens: () -> [StaticEffectScreen]
     private let query: (Set<Int>, Double) -> [SnowStormWindow]
-    private let panels: () -> [CGDirectDisplayID: NSPanel]
+    private let present: (NSPanel, SnowStormWindow?) -> Void
     private var configuration: StaticEffectConfiguration
     private var simulations: [CGDirectDisplayID: FireStormIgnitionSimulation] = [:]
-    private var layers: [CGDirectDisplayID: [Int: CAEmitterLayer]] = [:]
+    private var overlays: [CGDirectDisplayID: [Int: Overlay]] = [:]
     private var timer: Timer?
     private var previousTime = ProcessInfo.processInfo.systemUptime
 
     init(configuration: StaticEffectConfiguration,
          screens: @escaping () -> [StaticEffectScreen],
          query: @escaping (Set<Int>, Double) -> [SnowStormWindow],
-         panels: @escaping () -> [CGDirectDisplayID: NSPanel], automaticTicks: Bool) {
+         present: @escaping (NSPanel, SnowStormWindow?) -> Void = SnowStormController.order, automaticTicks: Bool) {
         self.configuration = configuration; self.screens = screens
-        self.query = query; self.panels = panels
+        self.query = query; self.present = present
         if automaticTicks {
             let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
             timer.tolerance = 0.015
@@ -378,43 +410,53 @@ final class FireStormIgnitions {
             self.timer = timer
         }
     }
+    deinit { shutdown() }
     func update(configuration: StaticEffectConfiguration) { self.configuration = configuration }
     func shutdown() {
         timer?.invalidate(); timer = nil
-        for screenLayers in layers.values { for layer in screenLayers.values { layer.removeFromSuperlayer() } }
-        layers.removeAll(); simulations.removeAll()
+        for screenOverlays in overlays.values { for overlay in screenOverlays.values { overlay.hide() } }
+        overlays.removeAll(); simulations.removeAll()
     }
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime
         let dt = now - previousTime; previousTime = now
-        let displays = screens()
+        tick(dt: dt)
+    }
+    private func tick(dt: Double) {
+        let displays = Array(screens().prefix(8))
+        let connected = Set(displays.map(\.id))
+        for id in Array(overlays.keys) where !connected.contains(id) {
+            overlays.removeValue(forKey: id)?.values.forEach { $0.hide() }
+            simulations.removeValue(forKey: id)
+        }
         let excluded = Set(NSApp.windows.filter { !$0.styleMask.contains(.titled) }.map(\.windowNumber))
         let desktopTop = NSScreen.screens.first?.frame.maxY ?? displays.first?.frame.maxY ?? 0
         let windows = query(excluded, desktopTop)
         for display in displays {
-            guard let panel = panels()[display.id], let root = panel.contentView?.layer else { continue }
             let simulation = simulations[display.id] ?? FireStormIgnitionSimulation()
             simulations[display.id] = simulation
+            let localWindows = windows.filter { $0.frame.intersects(display.frame) }
             simulation.advance(dt: dt, screen: display.frame,
-                               windows: windows.filter { $0.frame.intersects(display.frame) },
+                               windows: localWindows,
                                configuration: configuration)
-            var screenLayers = layers[display.id] ?? [:]
+            var screenOverlays = overlays[display.id] ?? [:]
             let active = Set(simulation.burns.map(\.id))
-            for (id, layer) in screenLayers where !active.contains(id) {
-                layer.removeFromSuperlayer(); screenLayers.removeValue(forKey: id)
+            for id in Array(screenOverlays.keys) where !active.contains(id) {
+                screenOverlays.removeValue(forKey: id)?.hide()
             }
             for burn in simulation.burns {
-                guard let window = windows.first(where: { $0.id == burn.windowID }) else { continue }
-                let layer: CAEmitterLayer
-                if let existing = screenLayers[burn.id] { layer = existing }
-                else {
-                    layer = FireStormLayers.windowFire(in: root.bounds)
-                    root.addSublayer(layer)
-                    screenLayers[burn.id] = layer
+                guard let window = localWindows.first(where: { $0.id == burn.windowID }) else { continue }
+                let frame = CGRect(x: window.frame.minX + burn.localX - 120,
+                                   y: window.frame.maxY - 5, width: 240, height: 240)
+                let overlay = screenOverlays[burn.id] ?? Overlay(frame: frame)
+                screenOverlays[burn.id] = overlay
+                if overlay.panel.frame != frame { overlay.panel.setFrame(frame, display: false) }
+                let layer = overlay.layer
+                // The continuous storm remains behind the frontmost window;
+                // a pre-existing burn must not jump in front when its host gains focus.
+                if window.id == localWindows.first?.id || burn.localX < 12 || burn.localX > window.frame.width - 12 {
+                    layer.birthRate = 0; overlay.hide(); continue
                 }
-                if layer.superlayer !== root { root.addSublayer(layer) }
-                layer.emitterPosition = CGPoint(x: window.frame.minX + burn.localX - display.frame.minX,
-                                                y: window.frame.maxY - display.frame.minY + 3)
                 if burn.isSmoking {
                     if layer.name != "fireStorm.windowSmoke" {
                         FireStormLayers.extinguish(layer)
@@ -426,12 +468,18 @@ final class FireStormIgnitions {
                     let fuel = max(0.25, 1 - burn.age / burn.duration)
                     layer.birthRate = Float((1.1 + 1.15 * (1 - flare)) * fuel)
                 }
+                present(overlay.panel, window)
             }
-            layers[display.id] = screenLayers
+            overlays[display.id] = screenOverlays
         }
     }
     #if TESTING
-    func tickForTesting() { tick() }
-    var activeFireCountForTesting: Int { layers.values.reduce(0) { $0 + $1.count } }
+    func tickForTesting(dt: Double = 0.1) { tick(dt: dt) }
+    func insertEmberForTesting(_ ember: FireStormIgnitionSimulation.Ember, on display: CGDirectDisplayID) {
+        let simulation = simulations[display] ?? FireStormIgnitionSimulation()
+        simulations[display] = simulation; simulation.insertEmber(ember)
+    }
+    var activeFireCountForTesting: Int { overlays.values.reduce(0) { $0 + $1.count } }
+    var panelsForTesting: [NSPanel] { overlays.values.flatMap { $0.values.map(\.panel) } }
     #endif
 }

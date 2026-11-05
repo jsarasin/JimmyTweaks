@@ -25,7 +25,7 @@ struct GestureFeedback {
     let frame: CGRect
     let kind: GestureKind
     let active: Bool
-    let preferences: GesturePreferences
+    var preferences: GesturePreferences
     var window: FeedbackWindow? = nil
     var sampleTime: TimeInterval = ProcessInfo.processInfo.systemUptime
     var idle = false
@@ -161,7 +161,13 @@ final class FeedbackController {
 
     func show(_ feedback: GestureFeedback?) {
         precondition(Thread.isMainThread)
-        if feedback?.dismissing == true { dismiss(); return }
+        if let feedback, feedback.dismissing {
+            if !feedback.preferences.animatedEffects || !feedback.preferences.effectsEnabled(for: feedback.kind) ||
+                (feedback.passive && !feedback.preferences.normalWindowEffectsActive) {
+                clear()
+            } else { dismiss() }
+            return
+        }
         // A late final AX callback may send another nil after Command release.
         // It must not erase a smoke transition that is already in progress.
         if feedback == nil, latest == nil, !dissolving.isEmpty { return }

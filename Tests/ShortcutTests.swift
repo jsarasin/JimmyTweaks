@@ -231,6 +231,8 @@ enum ShortcutTests {
         controller.reconcile(sessionActive:true)
         let mouseDown = CGEvent(mouseEventSource:nil,mouseType:.otherMouseDown,mouseCursorPosition:CGPoint(x:-10000,y:-10000),mouseButton:CGMouseButton(rawValue:4)!)!
         let mouseUp = CGEvent(mouseEventSource:nil,mouseType:.otherMouseUp,mouseCursorPosition:CGPoint(x:-10000,y:-10000),mouseButton:CGMouseButton(rawValue:4)!)!
+        // CGEvent otherwise inherits the user's currently held modifiers.
+        mouseDown.flags = []; mouseUp.flags = []
         mouseDown.setIntegerValueField(.eventSourceUnixProcessID,value:Int64(getpid()))
         check(!controller.intercept(type:.otherMouseDown,event:mouseDown), "Ignore self-generated input")
         mouseDown.setIntegerValueField(.eventSourceUnixProcessID,value:0); mouseUp.setIntegerValueField(.eventSourceUnixProcessID,value:0)
@@ -239,9 +241,10 @@ enum ShortcutTests {
         wait { routed == 1 }; wait { !controller.runner.isRunning }
         routeShortcut.mode = .transparent; preferences.shortcuts = [routeShortcut]; controller.reconcile(sessionActive:true)
         check(!controller.intercept(type:.otherMouseDown,event:mouseDown), "Active router never handles Transparent definitions")
+        let originalType = mouseDown.type, originalLocation = mouseDown.location, originalFlags = mouseDown.flags
         controller.observeForTesting(type:.otherMouseDown,event:mouseDown)
         controller.observeForTesting(type:.otherMouseUp,event:mouseUp)
-        check(mouseDown.type == .otherMouseDown && mouseDown.location == CGPoint(x:-10000,y:-10000) && mouseDown.flags.isEmpty, "Passive routing preserves original event fields")
+        check(mouseDown.type == originalType && mouseDown.location == originalLocation && mouseDown.flags == originalFlags, "Passive routing preserves original event fields")
         wait { routed == 2 }; wait { !controller.runner.isRunning }
         preferences.set(false,for:.shortcutsEnabled); controller.reconcile(sessionActive:true)
         check(!controller.intercept(type:.otherMouseDown,event:mouseDown), "Disabled module passes input through")

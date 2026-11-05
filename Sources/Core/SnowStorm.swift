@@ -7,6 +7,7 @@ struct SnowStormSettings: Equatable {
     var gusts = 0.5
     var decorations = false
     var lights = false
+    var behindWindows = false
     var maximumRadius: Double { 1.4 + maximumFlakeSize * 7.6 }
     var stormForce: Double {
         let intensity = max(0, min(1, snowfall))
@@ -104,16 +105,7 @@ struct StormDrift {
         self.id = id; self.window = window; self.frame = frame; self.cursorShape = cursorShape
         let count = cursorShape.map { min(192, $0.topPixels.count) } ?? max(4, min(192, Int(ceil(frame.width / 8))))
         masses = Array(repeating: 0, count: count)
-        heightCaps = Self.makeCaps(id: id, count: count, cursor: id == Self.cursorID)
-        if !isCursor {
-            for i in heightCaps.indices {
-                let x = frame.minX + (Double(i) + 0.5) * cellWidth
-                let distance = min(x - frame.minX, frame.maxX - x)
-                let fraction = min(1, max(0, (distance - Self.cornerBlank) / Self.cornerTaper))
-                let taper = fraction * fraction * (3 - 2 * fraction)
-                heightCaps[i] *= taper
-            }
-        }
+        heightCaps = Self.caps(id: id, count: count, cursor: id == Self.cursorID, width: frame.width)
         if let cursorShape {
             for i in heightCaps.indices where cursorShape.topY(at: frame.minX + (Double(i) + 0.5) * cellWidth, in: frame) == nil {
                 heightCaps[i] = 0
@@ -142,7 +134,17 @@ struct StormDrift {
             return max(2.25, min(24, (10.5 + 6 * broad + 11.25 * (local - 0.5) + 3.75 * (grain - 0.5)) * taper))
         }
     }
-    static func caps(id: UInt64, count: Int, cursor: Bool) -> [Double] { makeCaps(id: id, count: count, cursor: cursor) }
+    static func caps(id: UInt64, count: Int, cursor: Bool, width: Double) -> [Double] {
+        let caps = makeCaps(id: id, count: count, cursor: cursor)
+        guard !cursor else { return caps }
+        let cellWidth = width / Double(count)
+        return caps.enumerated().map { i, cap in
+            let x = (Double(i) + 0.5) * cellWidth
+            let distance = min(x, width - x)
+            let fraction = min(1, max(0, (distance - Self.cornerBlank) / Self.cornerTaper))
+            return cap * fraction * fraction * (3 - 2 * fraction)
+        }
+    }
     func height(at x: Double) -> Double {
         let i = max(0, min(masses.count - 1, Int((x - frame.minX) / cellWidth)))
         return masses[i] / cellWidth
@@ -342,7 +344,7 @@ final class SnowStormSimulation {
         if abs(frame.width - old.frame.width) > 0.01 {
             let count = max(4, min(192, Int(ceil(frame.width / 8))))
             var masses = Array(repeating: 0.0, count: count)
-            let caps = StormDrift.caps(id: old.id, count: count, cursor: old.isCursor)
+            let caps = StormDrift.caps(id: old.id, count: count, cursor: old.isCursor, width: frame.width)
             let width = frame.width / Double(count)
             for j in old.masses.indices where drifts[i].masses[j] > 0 {
                 let x = (Double(j) + 0.5) * old.cellWidth, mass = drifts[i].masses[j]

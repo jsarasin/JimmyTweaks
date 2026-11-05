@@ -103,7 +103,24 @@ enum SettingsRegressionTests {
         assert((page.controls["visualEffects.static.option.fireflyamount"] as! NSSlider).integerValue == 73)
         assert(preferences.int(.rainAmount) == 50, "Each effect keeps independent options")
         select(.snowStorm)
-        assert(area.frame.height == 320 && views(area).compactMap { $0 as? NSSlider }.count == 5)
+        assert(area.frame.height == 320 && views(area).compactMap { $0 as? NSSlider }.count == 6)
+        let snowOptions = page.controls["visualEffects.static.option.behindWindows"] as! SnowStormOptionsControl
+        for width in [960.0, 780.0] {
+            window.setContentSize(NSSize(width: width, height: 700)); window.layoutIfNeeded()
+            for control in views(area).filter({ $0 is NSButton || $0 is NSSlider || $0 is NSSegmentedControl }) {
+                assert(area.bounds.contains(control.convert(control.bounds, to: area)), "Snow Storm controls fit at the default and minimum Settings widths")
+            }
+            assert(snowOptions.frame.width >= snowOptions.intrinsicContentSize.width,
+                   "All four full segment labels fit without compression")
+            let segments = snowOptions.accessibilitySegments
+            assert(segments.count == 4, "The native control exposes four independent accessibility segments")
+            for (index, segment) in segments.enumerated() {
+                let labelWidth = (snowOptions.label(forSegment: index)! as NSString).size(withAttributes: [.font: snowOptions.font!]).width
+                assert(segment.accessibilityFrame().width >= labelWidth + 12,
+                       "Each native segment has room for its complete label and padding")
+            }
+        }
+        window.setContentSize(NSSize(width: 960, height: 700)); window.layoutIfNeeded()
         for slider in views(area).compactMap({ $0 as? NSSlider }) {
             assert(area.bounds.contains(slider.convert(slider.bounds, to: area)), "Storm controls fit inside the fixed configuration area")
         }

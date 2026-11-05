@@ -131,13 +131,16 @@ final class OrdinaryWindowEffectsObserver {
     }
     func update(_ preferences: GesturePreferences) {
         self.preferences = preferences
-        if !preferences.normalWindowEffectsActive { end() }
+        if !preferences.normalWindowEffectsActive || active.map({ !preferences.effectsEnabled(for: $0.kind) }) == true { end() }
     }
     func end() {
         generation &+= 1
         clock?.invalidate(); clock = nil
         down = nil; target = nil; dragging = false; inFlight = false; lastSample = 0
-        if var feedback = active { feedback.dismissing = true; onFeedback?(feedback) }
+        if var feedback = active {
+            feedback.preferences = preferences
+            feedback.dismissing = true; onFeedback?(feedback)
+        }
         active = nil
     }
     private func startClock() {

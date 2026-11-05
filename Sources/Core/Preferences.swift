@@ -73,6 +73,7 @@ enum PreferenceKey: String, CaseIterable {
     case stormSnowfall = "visualEffects.static.snowStorm.snowfall"
     case stormFlakeSize = "visualEffects.static.snowStorm.flakeSize"
     case stormGusts = "visualEffects.static.snowStorm.gusts"
+    case stormBehindWindows = "visualEffects.static.snowStorm.behindWindows"
     case stormFireplace = "visualEffects.static.snowStorm.fireplace"
     case stormFireplaceWidth = "visualEffects.static.snowStorm.fireplaceWidth"
     case stormFireplaceHeight = "visualEffects.static.snowStorm.fireplaceHeight"
@@ -126,7 +127,7 @@ enum PreferenceKey: String, CaseIterable {
         case .rainAmount, .rainSpeed, .rainSize, .rainSplashFrequency, .fireflyAmount, .fireflySpeed, .fireflySize, .stormSnowfall, .stormFlakeSize, .stormGusts, .stormFireplaceWidth, .fireEmberDensity, .fireStormSpeed, .fireFlameHeight: return 50
         case .stormFireplaceHeight: return 158
         case .stormFireplaceOffset: return 0
-        case .shortcutsEnabled, .suspended, .outline, .normalWindowEffects, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress, .menuBarAudio, .stormFireplace, .stormDecorations, .stormLights, .fireAsh: return false
+        case .shortcutsEnabled, .suspended, .outline, .normalWindowEffects, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress, .menuBarAudio, .stormBehindWindows, .stormFireplace, .stormDecorations, .stormLights, .fireAsh: return false
         case .fireSmoke, .fireHeatGlow: return true
         case .iconAbsorberPositionPanels: return true
         case .enabled, .resizeEnabled, .moveEnabled, .cursor, .hints, .animatedEffects, .showMenuBarIcon: return true

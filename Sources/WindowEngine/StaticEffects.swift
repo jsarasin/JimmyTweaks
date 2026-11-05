@@ -13,6 +13,7 @@ struct StaticEffectConfiguration: Equatable {
     let fireplaceOffset: Double
     let decorations: Bool
     let lights: Bool
+    let snowBehindWindows: Bool
     let wind: Double
     let ignitionChance: Double
     let smoke: Bool
@@ -31,6 +32,7 @@ struct StaticEffectConfiguration: Equatable {
         fireplaceOffset = Double(preferences.int(.stormFireplaceOffset)) / 100
         decorations = effect == .snowStorm && preferences.bool(.stormDecorations)
         lights = effect == .snowStorm && preferences.bool(.stormLights)
+        snowBehindWindows = effect == .snowStorm && preferences.bool(.stormBehindWindows)
         wind = effect == .fireStorm ? Double(preferences.int(.fireWindStrength)) / 100 : 0
         ignitionChance = effect == .fireStorm ? Double(preferences.int(.fireIgnitionChance)) / 100 : 0
         smoke = effect == .fireStorm && preferences.bool(.fireSmoke)
@@ -134,7 +136,8 @@ final class StaticEffectsController {
             for panel in panels.values { panel.orderOut(nil) }
             panels.removeAll()
             let settings = SnowStormSettings(snowfall: configuration.amount, maximumFlakeSize: configuration.size,
-                                             gusts: configuration.speed, decorations: configuration.decorations, lights: configuration.lights)
+                                             gusts: configuration.speed, decorations: configuration.decorations, lights: configuration.lights,
+                                             behindWindows: configuration.snowBehindWindows)
             if let storm { storm.update(settings: settings) }
             else { storm = SnowStormController(settings: settings, screens: screens,
                                                cursorShape: CursorSnowCapture.current(), fireplaceFactory: fireplaceFactory) }
@@ -202,7 +205,7 @@ final class StaticEffectsController {
         if configuration.effect == .fireStorm {
             if let ignitions { ignitions.update(configuration: configuration) }
             else { ignitions = FireStormIgnitions(configuration: configuration, screens: screens, query: query,
-                                                  panels: { [weak self] in self?.panels ?? [:] }, automaticTicks: automaticPlacement) }
+                                                  automaticTicks: automaticPlacement) }
         } else { ignitions?.shutdown(); ignitions = nil }
         if automaticPlacement && placementTimer == nil {
             let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in self?.positionPanels() }
@@ -281,7 +284,7 @@ final class StaticEffectsController {
         return context.makeImage()
     }
     #if TESTING
-    var panelsForTesting: [NSPanel] { Array(panels.values) + (storm?.allPanels ?? []) + (rain?.allPanels ?? []) }
+    var panelsForTesting: [NSPanel] { Array(panels.values) + (storm?.allPanels ?? []) + (rain?.allPanels ?? []) + (ignitions?.panelsForTesting ?? []) }
     var stormForTesting: SnowStormController? { storm }
     var rainForTesting: RainEffectController? { rain }
     var retiringFireplacesForTesting: [FireplaceController] { retiringFireplaces }

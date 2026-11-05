@@ -125,12 +125,39 @@ final class ChristmasWindowValidator {
 private final class StormPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        // These click-through overlays use desktop coordinates. AppKit's normal
+        // menu-bar constraint would shift the entire strip down when its
+        // transparent headroom extends above the display, detaching the artwork.
+        frameRect
+    }
 }
 
 /// Drawing is shared by the live overlays and the standalone preview fixture.
 enum SnowStormDrawing {
-    static func drift(_ drift: StormDrift, in context: CGContext, origin: CGPoint) {
+    static func clipWindows(_ windows: [SnowStormWindow], in context: CGContext, origin: CGPoint) {
+        let bounds = context.boundingBoxOfClipPath
+        let worldRect = bounds.offsetBy(dx: origin.x, dy: origin.y)
+        for window in windows where window.frame.intersects(worldRect) {
+            context.beginPath()
+            context.addRect(bounds)
+            context.addRect(window.frame.offsetBy(dx: -origin.x, dy: -origin.y))
+            context.clip(using: .evenOdd)
+        }
+    }
+    static func drift(_ drift: StormDrift, in context: CGContext, origin: CGPoint,
+                      occludingWindows: [SnowStormWindow] = []) {
         guard drift.mass > 0.01 else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+        // A roof bank belongs above its own window, including its rounded
+        // corners. Only windows in front of that host can cover its snow.
+        // Mask snow separately so lights and decorations keep their placement.
+        if let host = drift.window, let index = occludingWindows.firstIndex(where: { $0.id == host.id }) {
+            clipWindows(Array(occludingWindows.prefix(index)), in: context, origin: origin)
+        } else {
+            clipWindows(occludingWindows, in: context, origin: origin)
+        }
         if let shape = drift.cursorShape {
             cursorDrift(drift, shape: shape, in: context, origin: origin)
             return
@@ -243,9 +270,11 @@ enum SnowStormDrawing {
     }
 
     static func flakes(_ flakes: [StormFlake], windows: [SnowStormWindow], in context: CGContext,
-                       worldRect: CGRect, time: Double, excluding fireplaceFrame: CGRect? = nil) {
+                       worldRect: CGRect, time: Double, excluding fireplaceFrame: CGRect? = nil,
+                       behindWindows: Bool = false) {
         context.saveGState()
         defer { context.restoreGState() }
+        if behindWindows { clipWindows(windows, in: context, origin: worldRect.origin) }
         if let fireplaceFrame, fireplaceFrame.intersects(worldRect) {
             let bounds = CGRect(origin: .zero, size: worldRect.size)
             let fireplace = fireplaceFrame.offsetBy(dx: -worldRect.minX, dy: -worldRect.minY)
@@ -264,7 +293,7 @@ enum SnowStormDrawing {
         for (key, group) in groups {
             context.saveGState()
             let depth = key >> 2
-            if depth != (1 << 32), let index = windows.firstIndex(where: { UInt64($0.id) == depth }) {
+            if !behindWindows, depth != (1 << 32), let index = windows.firstIndex(where: { UInt64($0.id) == depth }) {
                 for window in windows.prefix(index) where window.frame.intersects(worldRect) {
                     let occluder = window.frame.offsetBy(dx: -worldRect.minX, dy: -worldRect.minY)
                     context.beginPath(); context.addRect(CGRect(origin: .zero, size: worldRect.size)); context.addRect(occluder)
@@ -300,6 +329,8 @@ private final class StormView: NSView {
     var holidayFrame: Int?
     var fireplaceFrame: CGRect?
     var santaOnly = false
+    var snowBehindWindows = false
+    var snowOccluders: [SnowStormWindow] = []
     override var isOpaque: Bool { false }
     override func draw(_ dirtyRect: NSRect) {
         guard let simulation, let context = NSGraphicsContext.current?.cgContext else { return }
@@ -312,7 +343,8 @@ private final class StormView: NSView {
         }
         if let driftID {
             if let drift = simulation.drifts.first(where: { $0.id == driftID }) {
-                SnowStormDrawing.drift(drift, in: context, origin: worldRect.origin)
+                SnowStormDrawing.drift(drift, in: context, origin: worldRect.origin,
+                                       occludingWindows: snowBehindWindows ? simulation.windows : [])
                 if let window = drift.window, let christmas, let decoration = christmas.decoration(for: window.id) {
                     ChristmasDrawing.window(window, decoration: decoration, chimney: christmas.hasChimney(window.id),
                         time: simulation.time, scene: christmas, in: context, origin: worldRect.origin)
@@ -324,7 +356,8 @@ private final class StormView: NSView {
                     time: simulation.time, in: context, origin: worldRect.origin)
             }
             SnowStormDrawing.flakes(simulation.particles, windows: simulation.windows, in: context,
-                                    worldRect: worldRect, time: simulation.time, excluding: fireplaceFrame)
+                                    worldRect: worldRect, time: simulation.time, excluding: fireplaceFrame,
+                                    behindWindows: snowBehindWindows)
         }
     }
 }
@@ -360,6 +393,7 @@ final class SnowStormController {
     private var driftPanels: [UInt64: NSPanel] = [:]
     private var stopped = false
     private var queryInFlight = false
+    private var windowReanchorRequested = false
     private var windows: [SnowStormWindow] = []
     private var sampleTime = 0.0
     private var previousTick = ProcessInfo.processInfo.systemUptime
@@ -392,11 +426,11 @@ final class SnowStormController {
             let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
             timer.tolerance = 0.004; RunLoop.main.add(timer, forMode: .common); clock = timer
             localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-                self?.scheduleDecorationReanchor()
+                self?.scheduleWindowReanchor()
                 return event
             }
             globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.scheduleDecorationReanchor()
+                self?.scheduleWindowReanchor()
             }
         }
     }
@@ -455,31 +489,24 @@ final class SnowStormController {
         if let window { panel.level = NSWindow.Level(rawValue: window.level); panel.order(.below, relativeTo: Int(window.id)) }
         else { panel.level = .normal; panel.orderFrontRegardless() }
     }
-    private func scheduleDecorationReanchor() {
+    private func scheduleWindowReanchor() {
         // Run after AppKit has processed the click that may raise its target.
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.stopped,
-                  self.settings.lights || self.settings.decorations || self.christmas.santa.active else { return }
-            self.reanchorDecoratedPanels()
+            guard let self, !self.stopped else { return }
+            self.windowReanchorRequested = true
+            self.sampleWindows(displays: self.screens(), pointer: self.cursor())
         }
     }
-    private func reanchorDecoratedPanels() {
+    private func reanchorWindowPanels(windows: [SnowStormWindow]) {
         guard !stopped, !driftPanels.isEmpty || !santaPanels.isEmpty else { return }
-        let targets = Dictionary(uniqueKeysWithValues: simulation.windows.compactMap { window -> (UInt32, SnowStormWindow)? in
-            christmas.decoration(for: window.id) == nil ? nil : (window.id, window)
-        })
-        guard !targets.isEmpty || !santaPanels.isEmpty,
-              let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return }
-        // Rebuild the strip order from the Window Server's current order. A
-        // click can raise a window before the next asynchronous geometry sample.
-        for entry in entries.reversed() {
-            guard let number = entry[kCGWindowNumber as String] as? Int,
-                  let target = targets[UInt32(number)],
-                  let panel = driftPanels[UInt64(target.id)] else { continue }
+        // Use the background sample, including its live IDs: a close click can
+        // remove a host before the animation has discarded its old strip.
+        for target in windows.reversed() {
+            guard let panel = driftPanels[UInt64(target.id)] else { continue }
             present(panel, target)
         }
         if let targetID = christmas.target,
-           let target = simulation.windows.first(where: { $0.id == targetID }) {
+           let target = windows.first(where: { $0.id == targetID }) {
             for panel in santaPanels.values { present(panel, target) }
         }
     }
@@ -551,14 +578,12 @@ final class SnowStormController {
         nextYetiTime = simulation.time + YetiEncounter.nextDelay(seed: holidaySeed ^ UInt64(Int(simulation.time)))
         return true
     }
-    private func tick() {
-        guard !stopped else { return }
-        let now = ProcessInfo.processInfo.systemUptime, dt = now - previousTick
-        previousTick = now
-        let displays = screens()
-        let pointer = cursor()
+    private func sampleWindows(displays: [StaticEffectScreen], pointer: CGPoint?) {
+        let now = ProcessInfo.processInfo.systemUptime
         if !queryInFlight {
             queryInFlight = true
+            let reanchor = windowReanchorRequested
+            windowReanchorRequested = false
             // Include Jimmy Tweaks' ordinary Settings window, but exclude all
             // untitled effect/control surfaces, including gesture overlays.
             let excluded = Set(NSApp.windows.filter { !$0.styleMask.contains(.titled) }.map(\.windowNumber))
@@ -576,10 +601,26 @@ final class SnowStormController {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, !self.stopped else { return }
                     self.windows = result; self.sampleTime = now; self.queryInFlight = false
+                    // A click arriving during this read needs a newer sample.
+                    // Coalesce such clicks into one follow-up, never a queue of
+                    // Window Server scans on the animation/input thread.
+                    if self.windowReanchorRequested {
+                        self.sampleWindows(displays: self.screens(), pointer: self.cursor())
+                    } else if reanchor {
+                        self.reanchorWindowPanels(windows: result)
+                    }
                     if wantsDock && self.fireplaceEnabled { self.fireplace?.updateDock(dock) }
                 }
             }
         }
+    }
+    private func tick() {
+        guard !stopped else { return }
+        let now = ProcessInfo.processInfo.systemUptime, dt = now - previousTick
+        previousTick = now
+        let displays = screens()
+        let pointer = cursor()
+        sampleWindows(displays: displays, pointer: pointer)
         simulation.advance(dt: dt, windows: windows, cursor: pointer, screens: displays.map(\.frame), settings: settings, windowSampleTime: sampleTime)
         refreshChristmas(screens: displays.map(\.frame))
         render(displays: displays)
@@ -606,7 +647,10 @@ final class SnowStormController {
             christmas.santaPhase(time: simulation.time) >= 12 &&
             christmas.santaPhase(time: simulation.time) < 18.8
         let holidayFrame: Int? = decorated == nil ? nil : Int(simulation.time * (hasCarolers || hasChimneySanta ? 24 : 6))
-        let changed = view.worldRect.size != frame.size || view.driftID != drift?.id || view.revision != drift?.revision || view.holidayFrame != holidayFrame
+        let occluders = settings.behindWindows ? simulation.windows : []
+        let changed = view.worldRect.size != frame.size || view.driftID != drift?.id || view.revision != drift?.revision || view.holidayFrame != holidayFrame ||
+            view.snowBehindWindows != settings.behindWindows || view.snowOccluders != occluders
+        view.snowBehindWindows = settings.behindWindows; view.snowOccluders = occluders
         view.worldRect = frame; view.driftID = drift?.id; view.revision = drift?.revision; view.holidayFrame = holidayFrame
         view.fireplaceFrame = drift == nil && fireplace?.model.isVisible == true ? fireplace?.model.layout.frame : nil
         view.simulation = simulation; view.christmas = christmas
@@ -629,7 +673,8 @@ final class SnowStormController {
             let panel = screenPanels[screen.id] ?? makePanel(frame: screen.frame)
             let isNew = screenPanels[screen.id] == nil
             if isNew { screenPanels[screen.id] = panel }
-            let target = simulation.windows.first { $0.frame.intersects(screen.frame) }
+            let screenWindows = simulation.windows.filter { $0.frame.intersects(screen.frame) }
+            let target = settings.behindWindows ? screenWindows.last : screenWindows.first
             let key = target.map { UInt64($0.id) << 32 | UInt64(UInt32(bitPattern: Int32($0.level))) } ?? 0
             // Wait for the first window sample before showing the field, so it
             // cannot flash in front of the foreground window at startup.
@@ -644,7 +689,6 @@ final class SnowStormController {
         let order = simulation.windows.map { UInt64($0.id) << 32 | UInt64(UInt32(bitPattern: Int32($0.level))) }
         let orderingChanged = lastOrder != order
         lastOrder = order
-        let foregroundID = simulation.windows.first?.id
         for drift in simulation.drifts.reversed() where active.contains(drift.id) {
             let shapedCursor = drift.cursorShape != nil
             let cornerDrop = drift.window == nil ? 0 : StormDrift.cornerDrop
@@ -658,12 +702,13 @@ final class SnowStormController {
             let panel = driftPanels[drift.id] ?? makePanel(frame: frame)
             driftPanels[drift.id] = panel
             if drift.isCursor { panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.cursorWindow)) - 1) }
-            let movedDecoratedWindow = decorated && panel.frame != frame
+            let movedWindow = drift.window != nil && panel.frame != frame
             update(panel, frame: frame, drift: drift)
             // A native drag can raise its window above our already visible
             // overlay without changing the CGWindow list order. Re-anchor that
-            // decorated strip to its own window whenever its frame moves.
-            if isNew || orderingChanged || movedDecoratedWindow || (decorated && drift.window?.id == foregroundID) {
+            // snowbank or decorated strip whenever its frame moves. Clicks
+            // re-anchor stationary hosts using a fresh background window sample.
+            if isNew || orderingChanged || movedWindow {
                 present(panel, drift.window)
             }
         }
@@ -698,6 +743,6 @@ final class SnowStormController {
     var fireplaceForTesting: FireplaceController? { fireplace }
     var santaPanelsForTesting: [NSPanel] { Array(santaPanels.values) }
     func scheduleYetiNowForTesting() { nextYetiTime = simulation.time }
-    func reanchorDecoratedPanelsForTesting() { reanchorDecoratedPanels() }
+    func reanchorWindowPanelsForTesting() { scheduleWindowReanchor() }
     #endif
 }

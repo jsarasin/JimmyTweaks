@@ -132,7 +132,8 @@ final class RuntimeCoordinator: NSObject {
         }
         engine.onOrdinaryFeedback = { [weak self, weak engine] state in
             guard let self = self, let engine = engine, self.engine === engine else { return }
-            if !self.preferences.bool(.suspended) && self.sessionActive && !self.engineStopping {
+            if !self.preferences.bool(.suspended) && self.sessionActive && !self.engineStopping &&
+                self.preferences.gesture.normalWindowEffectsActive {
                 self.feedback.show(state)
             } else { self.feedback.clear() }
         }

@@ -44,6 +44,14 @@ enum SnowStormTests {
         check(abs(resting.totalMass - restingMass) < 0.001 && conserved(resting), "settled snow does not silently vanish")
         check(resting.drifts[0].revision == quietRevision, "stationary banks do no per-frame relaxation work")
 
+        let background = SnowStormSimulation()
+        var backgroundSettings = quiet; backgroundSettings.behindWindows = true
+        advance(background, settings: backgroundSettings)
+        background.addParticleForTesting(flake(x: 180, y: 215))
+        advance(background, frames: 70, settings: backgroundSettings)
+        check(background.drifts[0].mass > 19.9 && background.particles.isEmpty && conserved(background),
+              "Background snowfall still lands and accumulates on window tops")
+
         let cornerLanding = SnowStormSimulation()
         advance(cornerLanding)
         cornerLanding.addParticleForTesting(flake(x: 110, y: 198, vy: -100, mass: 4, radius: 1))
@@ -159,6 +167,19 @@ enum SnowStormTests {
               "window accumulation stops at each cell's natural height cap")
         check(abs(capped.drifts[0].mass - cappedBank.mass) < 0.001, "a full irregular bank stops building up")
         check(!capped.particles.isEmpty && conserved(capped), "overflow remains mobile without losing or creating mass")
+        let resizedBank = SnowStormSimulation()
+        advance(resizedBank)
+        resizedBank.fillDriftForTesting(id: UInt64(window.id), height: 24)
+        for width in [window.frame.width + 1, window.frame.width - 19, window.frame.width + 80] {
+            var resizedWindow = window; resizedWindow.frame.size.width = width
+            advance(resizedBank, windows: [resizedWindow])
+            let drift = resizedBank.drifts[0]
+            let fresh = StormDrift(id: UInt64(window.id), window: resizedWindow, frame: resizedWindow.frame)
+            check(drift.heightCaps == fresh.heightCaps && drift.heightCaps.first == 0 && drift.heightCaps.last == 0,
+                  "resizing preserves the same tapered corner profile as a newly seen window")
+            check(zip(drift.heights, drift.heightCaps).allSatisfy { $0.0 <= $0.1 + 0.00001 } && conserved(resizedBank),
+                  "resizing to a tapered profile sheds overflow without losing snow mass")
+        }
 
         let pointer = SnowStormSimulation()
         let point = CGPoint(x: 200, y: 220)
@@ -342,6 +363,7 @@ enum SnowStormTests {
         check(large.particles.count <= SnowStormSimulation.maximumParticles && large.particles.allSatisfy { $0.position.x.isFinite && $0.position.y.isFinite }, "a sustained storm stays finite and bounded")
         check(conserved(large), "emission, screen exits, and culling account for all mass")
         try nativeAndRenderingChecks(root: root) { check($0, $1) }
+        behindWindowRenderingChecks { check($0, $1) }
         print("\(checks) Snow Storm checks passed: formula travel, edge nudges, varied landing depth, merged banks, cursor, Z order, sliders, bounded rendering, and cleanup.")
     }
 
@@ -371,15 +393,31 @@ enum SnowStormTests {
         controller.advanceForTesting(dt: 1.0 / 30, windows: [front, back], cursor: CGPoint(x: 510, y: 90))
         check(controller.bankRedrawRequestsForTesting == redrawRequests, "unchanged banks request no redraw with the full-screen field")
         orders.removeAll()
+        controller.advanceForTesting(dt: 1.0 / 30, windows: [front, back], cursor: CGPoint(x: 510, y: 90))
+        check(orders.isEmpty,
+              "a stationary foreground bank issues no repeated window-order requests")
+        orders.removeAll()
         var shifted = back; shifted.frame.origin.x += 1
         controller.advanceForTesting(dt: 1.0 / 30, windows: [front, shifted], cursor: CGPoint(x: 510, y: 90))
-        check(orders.isEmpty, "ordinary movement does not reorder every bank")
+        check(orders.compactMap { $0.1?.id } == [back.id],
+              "movement re-anchors only the moved bank to its own window")
         check(controller.allPanels.allSatisfy { $0.ignoresMouseEvents && !$0.canBecomeKey && !$0.canBecomeMain }, "all snow surfaces pass through clicks and focus")
         orders.removeAll()
         controller.advanceForTesting(dt: 1.0 / 60, windows: [back, front], cursor: CGPoint(x: 510, y: 90))
         check(fieldTargets.last == back.id, "the snowfall field follows focus-order changes")
         check(orders.compactMap { $0.1?.id }.count == 2, "unchanged-geometry Z reordering reorders both snowbanks")
         check(!controller.timerRunningForTesting, "controlled rendering does not start a live animation timer")
+        controller.update(settings: SnowStormSettings(behindWindows: true))
+        controller.advanceForTesting(dt: 1.0 / 60, windows: [back, front], cursor: CGPoint(x: 510, y: 90))
+        check(fieldTargets.last == front.id, "Behind-windows mode orders falling snow below the rearmost window")
+        let maskedRedraws = controller.bankRedrawRequestsForTesting
+        var movedOccluder = front; movedOccluder.frame.origin.y += 5
+        controller.advanceForTesting(dt: 1.0 / 60, windows: [back, movedOccluder], cursor: CGPoint(x: 510, y: 90))
+        check(controller.bankRedrawRequestsForTesting > maskedRedraws,
+              "Moving another window redraws stationary snowbanks with their new occlusion")
+        controller.update(settings: SnowStormSettings())
+        controller.advanceForTesting(dt: 1.0 / 60, windows: [back, front], cursor: CGPoint(x: 510, y: 90))
+        check(fieldTargets.last == back.id, "Turning behind-windows mode off restores the usual depth placement")
         try preview(controller.simulation, frames: frames, root: root)
         let previous = controller.allPanels
         controller.shutdown()
@@ -402,6 +440,9 @@ enum SnowStormTests {
         let model = live.simulation
         prefs.set(20, for: .stormSnowfall)
         check(wrapper.stormForTesting === live && live.simulation === model, "live slider changes preserve snow already in the simulation")
+        prefs.set(true, for: .stormBehindWindows)
+        check(wrapper.stormForTesting === live && live.simulation === model && StaticEffectConfiguration(preferences: prefs).snowBehindWindows,
+              "The live behind-windows preference preserves the running storm and its settled snow")
         reduced = true; wrapper.reconcile()
         check(wrapper.stormForTesting == nil && !live.timerRunningForTesting, "Reduce Motion tears down the Snow Storm clock")
         reduced = false; wrapper.reconcile()
@@ -411,6 +452,46 @@ enum SnowStormTests {
         wrapper.shutdown()
     }
 
+    private static func behindWindowRenderingChecks(check: (Bool, String) -> Void) {
+        let origin = CGPoint(x: -200, y: 300)
+        let worldRect = CGRect(origin: origin, size: CGSize(width: 160, height: 140))
+        let windows = [SnowStormWindow(id: 1, owner: 1, frame: CGRect(x: -180, y: 320, width: 70, height: 60), level: 0),
+                       SnowStormWindow(id: 2, owner: 2, frame: CGRect(x: -135, y: 335, width: 60, height: 50), level: 0)]
+        let points = [CGPoint(x: 35, y: 40), CGPoint(x: 75, y: 50), CGPoint(x: 110, y: 50), CGPoint(x: 140, y: 110)]
+        func context() -> CGContext {
+            CGContext(data: nil, width: 160, height: 140, bitsPerComponent: 8, bytesPerRow: 640,
+                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        }
+        func alpha(_ c: CGContext, _ x: Int, _ y: Int) -> UInt8 {
+            c.data!.assumingMemoryBound(to: UInt8.self)[(c.height - y - 1) * c.bytesPerRow + x * 4 + 3]
+        }
+        let flakes = points.map { point in
+            StormFlake(position: CGPoint(x: point.x + origin.x, y: point.y + origin.y),
+                       velocity: .zero, mass: 1, radius: 4, phase: 0, age: 1)
+        }
+        let usual = context(), behind = context()
+        SnowStormDrawing.flakes(flakes, windows: windows, in: usual, worldRect: worldRect, time: 0)
+        SnowStormDrawing.flakes(flakes, windows: windows, in: behind, worldRect: worldRect, time: 0, behindWindows: true)
+        check(points.allSatisfy { alpha(usual, Int($0.x), Int($0.y)) > 0 }, "The default mode retains snow at every sampled depth")
+        check(points.prefix(3).allSatisfy { alpha(behind, Int($0.x), Int($0.y)) == 0 } && alpha(behind, 140, 110) > 0,
+              "Behind-windows snow hides inside each window and their overlap, while remaining visible on the desktop")
+        var bank = StormDrift(id: 1, window: windows[0], frame: windows[0].frame)
+        bank.masses = Array(repeating: bank.cellWidth * 10, count: bank.masses.count)
+        let bankUsual = context(), bankFront = context(), bankBehind = context()
+        SnowStormDrawing.drift(bank, in: bankUsual, origin: origin)
+        SnowStormDrawing.drift(bank, in: bankFront, origin: origin, occludingWindows: windows)
+        check(alpha(bankUsual, 32, 79) > 0 && alpha(bankFront, 32, 79) > 0 && alpha(bankFront, 75, 83) > 0,
+              "Background snowfall preserves roof and rounded-corner piles above their host and windows behind it")
+        let frontToBack = Array(windows.reversed())
+        SnowStormDrawing.drift(bank, in: bankBehind, origin: origin, occludingWindows: frontToBack)
+        check(alpha(bankUsual, 75, 83) > 0 && alpha(bankBehind, 75, 83) == 0 && alpha(bankBehind, 50, 83) > 0,
+              "Settled snow hides behind foreground windows and stays visible above an exposed roof")
+        let partial = context()
+        partial.clip(to: CGRect(x: 25, y: 25, width: 100, height: 80))
+        SnowStormDrawing.drift(bank, in: partial, origin: origin, occludingWindows: frontToBack)
+        check(alpha(partial, 75, 83) == 0 && alpha(partial, 50, 83) > 0,
+              "Snowbank masking uses desktop coordinates even during a partial redraw")
+    }
     private static func preview(_ simulation: SnowStormSimulation, frames: [StaticEffectScreen], root: URL) throws {
         // Render the same drift/flake drawing against native-style fixture windows.
         let bounds = frames[0].frame

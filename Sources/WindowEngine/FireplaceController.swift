@@ -520,12 +520,19 @@ final class FireplaceController {
     deinit { shutdown() }
     func setEnabled(_ enabled: Bool) {
         guard !stopped else { return }
+        let restarting = enabled && (model.phase == .absent || model.phase == .dissolving)
         if !enabled && (model.phase == .assembling || model.phase == .burning) {
             let puff = FireplaceSmoke(object: model.layout.frame, strength: Float(max(0.2, model.backingOpacity)), renderer: renderer?.makeSibling())
             if smoke.count >= 2 { smoke.removeFirst().surface?.removeFromSuperview() }
             smoke.append(puff)
         }
         model.setEnabled(enabled)
+        if restarting {
+            // A new enable cycle starts a fresh Dock envelope. Preserve departing
+            // smoke at its original footprint until the next fresh Dock sample.
+            dock = nil
+            updateDock(nil)
+        }
     }
     func updateDock(_ dock: FireplaceDock?) {
         let previous = self.dock == nil ? nil : model.layout

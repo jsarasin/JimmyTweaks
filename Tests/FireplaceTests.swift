@@ -66,6 +66,22 @@ enum FireplaceTests {
         let trackingModel = FireplaceModel(layout: grown), originalHeat = trackingModel.fireHeat
         trackingModel.setLayout(restored)
         check(trackingModel.fireHeat == originalHeat, "tracking Dock height leaves the running flame simulation intact")
+        let cycling = FireplaceController(screens: { [StaticEffectScreen(id: 1, frame: screen)] }, present: { _ in }, allowGPU: false)!
+        cycling.updateDock(zoomed)
+        cycling.updateDock(dock)
+        check(cycling.model.layout.length == grown.length, "a live fireplace retains its magnified Dock envelope")
+        for finishDeparture in [false, true] {
+            cycling.updateDock(zoomed)
+            cycling.setEnabled(false)
+            if finishDeparture { for _ in 0..<45 { cycling.advance(1.0 / 30) } }
+            cycling.setEnabled(true)
+            cycling.updateDock(dock)
+            check(cycling.model.layout.length == layout.length,
+                  "a new enable cycle resets the retained width, including during smoke departure")
+            check(cycling.smokeCountForTesting > 0 || finishDeparture,
+                  "resetting the width preserves any smoke that is still departing")
+        }
+        cycling.shutdown()
         let leftScreen = CGRect(x: -1280, y: -200, width: 1280, height: 800)
         for edge in [FireplaceLayout.Edge.left, .right] {
             let d = FireplaceDock(frame: CGRect(x: edge == .left ? leftScreen.minX : leftScreen.maxX - 70, y: -100, width: 70, height: 560))

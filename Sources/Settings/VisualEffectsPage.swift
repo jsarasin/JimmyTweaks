@@ -5,12 +5,10 @@ final class VisualEffectsPageController: SettingsPageController {
     private let configuration = NSView()
     private var configuredEffect: StaticEffect?
     private var configurationSliders: [PreferenceSlider] = []
-    private weak var fireplaceToggle: ActionButton?
+    private weak var snowOptions: SnowStormOptionsControl?
     private weak var fireplaceWidthSlider: PreferenceSlider?
     private weak var fireplaceHeightSlider: PreferenceSlider?
     private weak var fireplaceOffsetSlider: PreferenceSlider?
-    private weak var decorationsToggle: ActionButton?
-    private weak var lightsToggle: ActionButton?
     private var fireToggles: [PreferenceKey: ActionButton] = [:]
 
     override func build() {
@@ -61,21 +59,18 @@ final class VisualEffectsPageController: SettingsPageController {
         let effect = context.preferences.staticEffect
         guard configuredEffect != effect else {
             configurationSliders.forEach { $0.refresh() }
-            fireplaceToggle?.state = context.preferences.bool(.stormFireplace) ? .on : .off
+            snowOptions?.refresh()
             fireplaceWidthSlider?.slider.isEnabled = context.preferences.bool(.stormFireplace)
             fireplaceHeightSlider?.slider.isEnabled = context.preferences.bool(.stormFireplace)
             fireplaceOffsetSlider?.slider.isEnabled = context.preferences.bool(.stormFireplace)
-            decorationsToggle?.state = context.preferences.bool(.stormDecorations) ? .on : .off
-            lightsToggle?.state = context.preferences.bool(.stormLights) ? .on : .off
             for (key, button) in fireToggles { button.state = context.preferences.bool(key) ? .on : .off }
             return
         }
         configuredEffect = effect
-        fireplaceToggle = nil
+        snowOptions = nil
         fireplaceWidthSlider = nil
         fireplaceHeightSlider = nil
         fireplaceOffsetSlider = nil
-        decorationsToggle = nil; lightsToggle = nil
         fireToggles.removeAll()
         configurationSliders.removeAll()
         configuration.subviews.forEach { $0.removeFromSuperview() }
@@ -96,7 +91,7 @@ final class VisualEffectsPageController: SettingsPageController {
             ])
             return
         }
-        let content = UI.vertical([], spacing: effect == .fireStorm ? 8 : 14)
+        let content = UI.vertical([], spacing: effect == .fireStorm ? 8 : effect == .snowStorm ? 10 : 14)
         content.translatesAutoresizingMaskIntoConstraints = false
         configuration.addSubview(content)
         NSLayoutConstraint.activate([
@@ -107,55 +102,36 @@ final class VisualEffectsPageController: SettingsPageController {
         var snowFireplaceSize: (width: PreferenceSlider, height: PreferenceSlider, offset: PreferenceSlider)?
         if effect == .snowStorm {
             let prefs = context.preferences
-            let fireplace = ActionButton("Fireplace") {}; fireplace.setButtonType(.switch)
-            fireplace.state = prefs.bool(.stormFireplace) ? .on : .off
+            let options = SnowStormOptionsControl(preferences: prefs)
+            options.selectionChanged = { [weak self] in self?.refreshConfiguration() }
+            snowOptions = options
             let fireplaceWidth = PreferenceSlider(preferences: prefs, key: .stormFireplaceWidth)
             let fireplaceHeight = PreferenceSlider(preferences: prefs, key: .stormFireplaceHeight)
             let fireplaceOffset = PreferenceSlider(preferences: prefs, key: .stormFireplaceOffset)
             fireplaceWidth.slider.isEnabled = prefs.bool(.stormFireplace)
             fireplaceHeight.slider.isEnabled = prefs.bool(.stormFireplace)
             fireplaceOffset.slider.isEnabled = prefs.bool(.stormFireplace)
-            fireplace.handler = { [weak fireplace, weak fireplaceWidth, weak fireplaceHeight, weak fireplaceOffset] in
-                let enabled = fireplace?.state == .on
-                prefs.set(enabled, for: .stormFireplace)
-                fireplaceWidth?.slider.isEnabled = enabled
-                fireplaceHeight?.slider.isEnabled = enabled
-                fireplaceOffset?.slider.isEnabled = enabled
-            }
-            fireplaceToggle = fireplace
             fireplaceWidthSlider = fireplaceWidth
             fireplaceHeightSlider = fireplaceHeight
             fireplaceOffsetSlider = fireplaceOffset
             snowFireplaceSize = (fireplaceWidth, fireplaceHeight, fireplaceOffset)
-            let decorations = ActionButton("") {}; decorations.setButtonType(.switch)
-            decorations.setAccessibilityLabel("Decorations")
-            decorations.state = prefs.bool(.stormDecorations) ? .on : .off
-            decorations.handler = { [weak decorations] in prefs.set(decorations?.state == .on, for: .stormDecorations) }
-            decorationsToggle = decorations
-            let decorationsLabel = UI.label("Decorations")
-            decorationsLabel.identifier = NSUserInterfaceItemIdentifier("visualEffects.static.decorationsLabel")
-            let santaGesture = NSClickGestureRecognizer(target: self, action: #selector(summonSanta(_:)))
-            santaGesture.numberOfClicksRequired = 2
-            decorationsLabel.addGestureRecognizer(santaGesture)
-            let decorationsControl = UI.horizontal([decorations, decorationsLabel], spacing: 2)
-            let lights = ActionButton("") {}; lights.setButtonType(.switch)
-            lights.setAccessibilityLabel("Lights")
-            lights.state = prefs.bool(.stormLights) ? .on : .off
-            lights.handler = { [weak lights] in prefs.set(lights?.state == .on, for: .stormLights) }
-            lightsToggle = lights
-            let lightsLabel = UI.label("Lights")
-            lightsLabel.identifier = NSUserInterfaceItemIdentifier("visualEffects.static.lightsLabel")
-            let yetiGesture = NSClickGestureRecognizer(target: self, action: #selector(summonYeti(_:)))
-            yetiGesture.numberOfClicksRequired = 2
-            lightsLabel.addGestureRecognizer(yetiGesture)
-            let lightsControl = UI.horizontal([lights, lightsLabel], spacing: 2)
-            add(UI.horizontal([UI.label(effect.title, weight: .semibold), NSView(), fireplace, decorationsControl, lightsControl], spacing: 16), to: content)
-            metadata(fireplace, id: "visualEffects.static.option.fireplace", label: "Fireplace", description: "Build an open-bottom fireplace behind the Dock with irregular flames. It starts wider than the Dock and grows to fit magnification and extra icons. Bricks fly in; turning it off disperses it into smoke. Clicks pass through.", keywords: ["snow storm", "hearth", "bricks", "wood", "flame", "dock", "magnification", "smoke"], section: "Static", value: { prefs.bool(.stormFireplace) ? "On" : "Off" })
+            add(UI.label(effect.title, weight: .semibold), to: content)
+            add(options, to: content)
+            // Each option keeps its existing search identity and saved value.
+            // Native segments provide their own accessibility labels and states.
+            func optionMetadata(_ segment: Int, id: String, label: String, description: String, keywords: [String], section: String, value: @escaping () -> String?) {
+                controls[id] = options
+                options.setToolTip(description, forSegment: segment)
+                context.catalog.register(ControlMetadata(id: id, label: label, description: description, keywords: keywords,
+                    section: section, destination: SearchDestination(page: page, controlID: id), value: value))
+            }
+            optionMetadata(0, id: "visualEffects.static.option.behindWindows", label: "Background snowfall", description: "Keep falling snow behind windows while snow still piles up on their tops and rounded corners. Windows in front hide covered snowbanks. Lights and decorations keep their usual placement.", keywords: ["snow storm", "behind", "background", "windows", "snow", "overlap", "roof", "pile"], section: "Static", value: { prefs.bool(.stormBehindWindows) ? "On" : "Off" })
+            optionMetadata(2, id: "visualEffects.static.option.fireplace", label: "Fireplace", description: "Build an open-bottom fireplace behind the Dock with irregular flames. It starts wider than the Dock and grows to fit magnification and extra icons. Bricks fly in; turning it off disperses it into smoke. Clicks pass through.", keywords: ["snow storm", "hearth", "bricks", "wood", "flame", "dock", "magnification", "smoke"], section: "Static", value: { prefs.bool(.stormFireplace) ? "On" : "Off" })
             metadata(fireplaceWidth.slider, id: "visualEffects.static.option.fireplaceWidth", label: "Fireplace Width", description: "Choose 30% to 80% of the display width for the fireplace, or the display height for a side Dock. The surround can grow farther when needed to contain the Dock and its magnified icons.", keywords: ["fireplace", "width", "size", "dock", "screen"], section: "Static", value: { [weak fireplaceWidth] in fireplaceWidth?.valueText })
             metadata(fireplaceHeight.slider, id: "visualEffects.static.option.fireplaceHeight", label: "Fireplace Height", description: "Set the fireplace height from 80 to 320 points, independently of the Dock size.", keywords: ["fireplace", "height", "size", "screen"], section: "Static", value: { [weak fireplaceHeight] in fireplaceHeight?.valueText })
             metadata(fireplaceOffset.slider, id: "visualEffects.static.option.fireplaceOffset", label: "Fireplace Offset", description: "Move the fireplace across the display. The centre tick snaps to zero; each end places the fireplace at the screen edge. For a side Dock, this moves it vertically.", keywords: ["fireplace", "offset", "position", "centre", "center", "left", "right"], section: "Static", value: { [weak fireplaceOffset] in fireplaceOffset?.valueText })
-            metadata(decorations, id: "visualEffects.static.option.decorations", label: "Decorations", description: "Show trees, presents, snowmen, and carolers on normal app windows whenever Snow Storm runs.", keywords: ["christmas", "tree", "presents", "snowman", "carolers"], section: "Static", value: { prefs.bool(.stormDecorations) ? "On" : "Off" })
-            metadata(lights, id: "visualEffects.static.option.lights", label: "Lights", description: "Hang old-style incandescent bulbs on green wire below the top edge of normal app windows whenever Snow Storm runs.", keywords: ["christmas", "bulbs", "window lights", "holiday", "incandescent"], section: "Static", value: { prefs.bool(.stormLights) ? "On" : "Off" })
+            optionMetadata(3, id: "visualEffects.static.option.decorations", label: "Decorations", description: "Show trees, presents, snowmen, and carolers on normal app windows whenever Snow Storm runs.", keywords: ["christmas", "tree", "presents", "snowman", "carolers"], section: "Static", value: { prefs.bool(.stormDecorations) ? "On" : "Off" })
+            optionMetadata(1, id: "visualEffects.static.option.lights", label: "Lights", description: "Hang old-style incandescent bulbs on green wire below the top edge of normal app windows whenever Snow Storm runs.", keywords: ["christmas", "bulbs", "window lights", "holiday", "incandescent"], section: "Static", value: { prefs.bool(.stormLights) ? "On" : "Off" })
         } else if effect == .fireStorm {
             let prefs = context.preferences
             func fireToggle(_ title: String, key: PreferenceKey, id: String, description: String) -> ActionButton {
@@ -200,8 +176,6 @@ final class VisualEffectsPageController: SettingsPageController {
             add(UI.caption("Snow forms uneven banks up to 24 points on windows and 12 on the cursor. Edge snow can spill; quick shaking sheds more. Snowfall intensity changes density and fall speed. Wind gusts controls sideways bursts and occasional edge vortices."), to: content)
         }
     }
-    @objc private func summonSanta(_ sender: Any) { context.preferences.requestSanta() }
-    @objc private func summonYeti(_ sender: Any) { context.preferences.requestYeti() }
 
     private func effectControls(resizing: Bool, to parent: NSStackView) {
         let prefs = context.preferences
@@ -221,6 +195,70 @@ final class VisualEffectsPageController: SettingsPageController {
         }
     }
     @objc private func motionSettingsChanged() { refreshValues() }
+}
+
+/// Native joined segments retain AppKit's mouse, keyboard, and accessibility toggles.
+final class SnowStormOptionsControl: NSSegmentedControl {
+    static let options: [(label: String, key: PreferenceKey)] = [
+        ("Background snowfall", .stormBehindWindows), ("Lights", .stormLights),
+        ("Fireplace", .stormFireplace), ("Decorations", .stormDecorations)
+    ]
+    var selectionChanged: (() -> Void)?
+    private let preferences: PreferenceStore
+    private var selectionBeforeClick: [Bool]?
+
+    init(preferences: PreferenceStore) {
+        self.preferences = preferences
+        super.init(frame: .zero)
+        segmentCount = Self.options.count
+        trackingMode = .selectAny
+        segmentStyle = .rounded
+        borderShape = .roundedRectangle
+        segmentDistribution = .fill
+        font = .systemFont(ofSize: NSFont.systemFontSize)
+        for (index, option) in Self.options.enumerated() { setLabel(option.label, forSegment: index) }
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        identifier = NSUserInterfaceItemIdentifier("visualEffects.static.option.snowOptions")
+        setAccessibilityLabel("Snow Storm options")
+        setAccessibilityHelp("Toggle each option independently. Any combination, including all off, is allowed.")
+        target = self; action = #selector(saveSelection)
+        refresh()
+    }
+    required init?(coder: NSCoder) { fatalError("Programmatic interface") }
+
+    func refresh() {
+        for (index, option) in Self.options.enumerated() { setSelected(preferences.bool(option.key), forSegment: index) }
+    }
+    @objc private func saveSelection() {
+        // Snapshot before posting notifications: a Settings refresh may run synchronously.
+        let selected = (0..<segmentCount).map { isSelected(forSegment: $0) }
+        preferences.batch {
+            for (index, option) in Self.options.enumerated() { preferences.set(selected[index], for: option.key) }
+        }
+        selectionChanged?()
+    }
+    // AppKit exposes the four native checkbox elements beneath the segmented cell.
+    var accessibilitySegments: [NSAccessibilityProtocol] {
+        cell?.accessibilityChildren() as? [NSAccessibilityProtocol] ?? []
+    }
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2, let window {
+            let point = window.convertPoint(toScreen: event.locationInWindow)
+            if let index = accessibilitySegments.firstIndex(where: { $0.accessibilityFrame().contains(point) }), index == 1 || index == 3 {
+                // The first click toggled immediately. Restore it on the second
+                // so the secret double-click keeps the original saved selection.
+                if let selectionBeforeClick {
+                    setSelected(selectionBeforeClick[index], forSegment: index)
+                    saveSelection()
+                }
+                selectionBeforeClick = nil
+                if index == 3 { preferences.requestSanta() } else { preferences.requestYeti() }
+                return
+            }
+        }
+        selectionBeforeClick = (0..<segmentCount).map { isSelected(forSegment: $0) }
+        super.mouseDown(with: event)
+    }
 }
 
 private final class PreferenceSlider: NSView {

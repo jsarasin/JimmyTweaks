@@ -87,7 +87,7 @@ import QuartzCore
         check(FireStormLayers.make(configuration: StaticEffectConfiguration(preferences: preferences), bounds: bounds).count == 3,
               "Each checkbox removes its optional visual layer")
         let screen = CGRect(x: 0, y: 0, width: 900, height: 700)
-        let foreground = SnowStormWindow(id: 10, owner: 10, frame: CGRect(x: 0, y: 0, width: 900, height: 700), level: 0)
+        let foreground = SnowStormWindow(id: 10, owner: 10, frame: CGRect(x: 700, y: 0, width: 180, height: 600), level: 0)
         let roof = SnowStormWindow(id: 11, owner: 11, frame: CGRect(x: 100, y: 100, width: 500, height: 300), level: 0)
         let strike = FireStormIgnitionSimulation.Ember(position: CGPoint(x: 300, y: 420), velocity: CGVector(dx: 0, dy: -300))
         let calm = FireStormIgnitionSimulation(random: { 0.75 })
@@ -105,6 +105,19 @@ import QuartzCore
         fire.advance(dt: 0.1, screen: screen, windows: [foreground, roof], configuration: StaticEffectConfiguration(preferences: preferences))
         check(fire.burns.count == 1 && fire.burns[0].windowID == roof.id && fire.burns[0].localX == 200,
               "A certain roof strike starts a fire anchored to the window")
+        let occluder = SnowStormWindow(id: 12, owner: 12, frame: CGRect(x: 150, y: 350, width: 400, height: 250), level: 0)
+        let hiddenRoof = FireStormIgnitionSimulation(random: { 0.5 })
+        hiddenRoof.insertEmber(strike)
+        hiddenRoof.advance(dt: 0.1, screen: screen, windows: [foreground, occluder, roof],
+                           configuration: StaticEffectConfiguration(preferences: preferences))
+        check(hiddenRoof.burns.allSatisfy { $0.windowID != roof.id }, "A roof covered by an intermediate window cannot ignite")
+        let crossed = FireStormIgnitionSimulation(random: { 0.5 })
+        let higherRoof = SnowStormWindow(id: 13, owner: 13, frame: CGRect(x: 100, y: 250, width: 500, height: 180), level: 0)
+        crossed.insertEmber(.init(position: CGPoint(x: 300, y: 450), velocity: CGVector(dx: 0, dy: -600)))
+        crossed.advance(dt: 0.1, screen: screen, windows: [foreground, roof, higherRoof],
+                        configuration: StaticEffectConfiguration(preferences: preferences))
+        check(crossed.burns.first?.windowID == higherRoof.id,
+              "A fast ember strikes the highest crossed roof before a lower window")
         let movedRoof = SnowStormWindow(id: roof.id, owner: roof.owner,
                                         frame: roof.frame.offsetBy(dx: 120, dy: 40), level: 0)
         fire.advance(dt: 0.1, screen: screen, windows: [foreground, movedRoof],
@@ -172,8 +185,67 @@ import QuartzCore
         slider.integerValue = 63; _ = slider.sendAction(slider.action!, to: slider.target)
         check(preferences.int(.fireEmberDensity) == 63, "Slider changes are saved immediately")
         window.orderOut(nil); context.iconAbsorber.shutdown(); runtime.shortcuts.shutdown()
+        nativeIgnitions(configuration: maximum) { condition, message in check(condition, message) }
         try preview(root: root)
         print("\(checks) Fire Storm checks passed: controls, independent layers, particle budget, and lifecycle.")
+    }
+
+    private static func nativeIgnitions(configuration: StaticEffectConfiguration, check: (Bool, String) -> Void) {
+        guard let display = NSScreen.screens.first else { return }
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.08)) }
+        let frame = CGRect(x: display.frame.midX - 300, y: display.frame.midY - 100, width: 420, height: 200)
+        let target = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let cover = NSWindow(contentRect: frame.offsetBy(dx: 500, dy: 30), styleMask: [.titled], backing: .buffered, defer: false)
+        let foreground = NSWindow(contentRect: frame.offsetBy(dx: -450, dy: 0), styleMask: [.titled], backing: .buffered, defer: false)
+        target.orderFrontRegardless(); cover.orderFrontRegardless(); foreground.orderFrontRegardless(); settle()
+        defer { target.orderOut(nil); cover.orderOut(nil); foreground.orderOut(nil) }
+        func snapshot(_ window: NSWindow) -> SnowStormWindow {
+            SnowStormWindow(id: UInt32(window.windowNumber), owner: getpid(), frame: window.frame, level: 0)
+        }
+        var windows = [snapshot(foreground), snapshot(cover), snapshot(target)]
+        let controller = FireStormIgnitions(configuration: configuration,
+            screens: { [StaticEffectScreen(id: 1, frame: display.frame)] }, query: { _, _ in windows }, automaticTicks: false)
+        defer { controller.shutdown() }
+        controller.insertEmberForTesting(.init(position: CGPoint(x: target.frame.midX, y: target.frame.maxY + 10),
+                                               velocity: CGVector(dx: 0, dy: -300)), on: 1)
+        controller.tickForTesting(); settle()
+        check(controller.activeFireCountForTesting == 1, "A visible roof strike creates one bounded ignition overlay")
+        guard let panel = controller.panelsForTesting.first else { return }
+        check(panel.ignoresMouseEvents && !panel.canBecomeKey && panel.frame.width <= 300 && panel.frame.height <= 300,
+              "Ignition overlays are small, click-through, and nonactivating")
+        let original = panel.frame
+        target.setFrameOrigin(target.frame.origin.applying(CGAffineTransform(translationX: 12, y: 8)))
+        windows = [snapshot(foreground), snapshot(cover), snapshot(target)]
+        controller.tickForTesting()
+        check(panel.frame.origin == original.origin.applying(CGAffineTransform(translationX: 12, y: 8)),
+              "A roof fire follows its moving host without allocating another overlay")
+        cover.setFrameOrigin(CGPoint(x: target.frame.midX - 100, y: target.frame.maxY - 25))
+        cover.orderFrontRegardless(); foreground.orderFrontRegardless(); settle()
+        windows = [snapshot(foreground), snapshot(cover), snapshot(target)]
+        controller.tickForTesting(); settle()
+        let ids = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
+            .compactMap { $0[kCGWindowNumber as String] as? Int }
+        let correctOrder: Bool
+        if let coverIndex = ids.firstIndex(of: cover.windowNumber), let fireIndex = ids.firstIndex(of: panel.windowNumber),
+           let targetIndex = ids.firstIndex(of: target.windowNumber) { correctOrder = coverIndex < fireIndex && fireIndex < targetIndex }
+        else { correctOrder = false }
+        check(correctOrder, "The Window Server occludes an existing roof fire behind a covering background window")
+        target.orderFrontRegardless(); windows = [snapshot(target), snapshot(foreground), snapshot(cover)]
+        controller.tickForTesting()
+        check(!panel.isVisible, "A fire stays hidden when its host becomes the foreground window")
+        cover.orderFrontRegardless(); foreground.orderFrontRegardless(); settle()
+        windows = [snapshot(foreground), snapshot(cover), snapshot(target)]
+        let noNewFires = PreferenceStore(defaults: MemoryDefaults())
+        noNewFires.set(StaticEffect.fireStorm.rawValue, for: .staticEffect)
+        noNewFires.set(0, for: .fireIgnitionChance)
+        controller.update(configuration: StaticEffectConfiguration(preferences: noNewFires))
+        func smoking() -> Bool { panel.contentView?.layer?.sublayers?.first?.name == "fireStorm.windowSmoke" }
+        for _ in 0..<50 where !smoking() { controller.tickForTesting() }
+        check(smoking() && panel.isVisible, "A background fire transitions to smoke in the same window-attached overlay")
+        for _ in 0..<20 { controller.tickForTesting() }
+        check(controller.panelsForTesting.isEmpty && !panel.isVisible, "Spent fires release their overlays after the smoke fades")
+        controller.shutdown()
+        check(controller.panelsForTesting.isEmpty && !panel.isVisible, "Shutdown removes every ignition overlay")
     }
 
     private static func preview(root: URL) throws {

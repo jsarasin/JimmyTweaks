@@ -191,7 +191,11 @@ import ImageIO
               "Window Server places the hearth behind normal windows and the Dock")
         check(controller.model.layout.opening.applying(controller.model.layout.transform).contains(mock.frame), "the native Dock fixture fits between the walls and under the lintel")
         let old = controller.model.layout
-        mock.setFrame(CGRect(x: mock.frame.minX - 100, y: mock.frame.minY, width: 700, height: 160), display: true)
+        // Force growth beyond the saved display-width minimum, including on
+        // wide monitors where a fixed 700-point Dock would still be too small.
+        let largerWidth = min(screen.frame.width - 24, max(700, old.length))
+        mock.setFrame(CGRect(x: screen.frame.midX - largerWidth / 2, y: mock.frame.minY,
+                             width: largerWidth, height: 160), display: true)
         controller.updateDock(FireplaceDock(frame: mock.frame)); controller.advance(1.0 / 30)
         check(controller.model.layout.length > old.length && controller.model.layout.depth == old.depth &&
               panel.level.rawValue < mock.level.rawValue,

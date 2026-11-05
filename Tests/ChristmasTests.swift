@@ -320,9 +320,11 @@ enum ChristmasTests {
         movingLights.advanceForTesting(dt: 1.0 / 30, windows: [draggedLit, other], cursor: nil)
         check(reanchors == [lit.id], "Dragging the frontmost lit window re-anchors its own light strip above it")
         reanchors.removeAll()
-        movingLights.advanceForTesting(dt: 1.0 / 30, windows: [draggedLit, other], cursor: nil)
-        check(reanchors == [lit.id], "The foreground light strip is re-anchored even when its window has not moved")
+        for _ in 0..<60 { movingLights.advanceForTesting(dt: 1.0 / 30, windows: [draggedLit, other], cursor: nil) }
+        check(reanchors.isEmpty, "Animating stationary decorations issues no repeated window-order requests")
         movingLights.shutdown()
+        windowSamplingChecks(screens: screens, windows: [lit, other], check: { check($0, $1) })
+        topEdgeChecks(check: { check($0, $1) })
         if let display = NSScreen.screens.first {
             let first = NSWindow(contentRect: CGRect(x: display.frame.midX - 260, y: display.frame.midY - 90, width: 300, height: 180),
                                  styleMask: [.titled], backing: .buffered, defer: false)
@@ -336,29 +338,40 @@ enum ChristmasTests {
             let secondWindow = SnowStormWindow(id: UInt32(second.windowNumber), owner: getpid(), frame: second.frame, level: 0)
             let layeredLights = SnowStormController(settings: SnowStormSettings(lights: true),
                 screens: { [StaticEffectScreen(id: 1, frame: display.frame)] }, cursor: { nil },
-                query: { _, _ in [] }, automaticTicks: false, currentDate: { date(23) },
+                automaticTicks: false, currentDate: { date(23) },
                 holidayCalendar: calendar, holidaySeed: 107)
             defer { layeredLights.shutdown() }
             layeredLights.advanceForTesting(dt: 1.0 / 30, windows: [secondWindow, firstWindow], cursor: nil)
             let strips = layeredLights.allPanels.filter { $0.frame.height == 106 + ChristmasDrawing.windowStripDrop }
             let firstStrip = strips.first { abs($0.frame.minX - (first.frame.minX - 4)) < 0.5 }!
             let secondStrip = strips.first { abs($0.frame.minX - (second.frame.minX - 4)) < 0.5 }!
-            func orderedIDs() -> [Int] {
-                (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
-                    .compactMap { $0[kCGWindowNumber as String] as? Int }
+            func waitForOrder(_ condition: ([Int]) -> Bool) -> Bool {
+                let deadline = Date().addingTimeInterval(1)
+                repeat {
+                    let ids = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
+                        .compactMap { $0[kCGWindowNumber as String] as? Int }
+                    if condition(ids) { return true }
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                } while Date() < deadline
+                return false
+            }
+            func above(_ upper: Int, _ lower: Int, in ids: [Int]) -> Bool {
+                guard let a = ids.firstIndex(of: upper), let b = ids.firstIndex(of: lower) else { return false }
+                return a < b
             }
             second.orderFrontRegardless()
-            layeredLights.reanchorDecoratedPanelsForTesting()
-            var ids = orderedIDs()
-            check(ids.firstIndex(of: secondStrip.windowNumber)! < ids.firstIndex(of: second.windowNumber)!,
+            check(waitForOrder { above(second.windowNumber, first.windowNumber, in: $0) }, "The native fixture windows become visible in order")
+            layeredLights.reanchorWindowPanelsForTesting()
+            check(waitForOrder { above(secondStrip.windowNumber, second.windowNumber, in: $0) },
                   "Clicking the foreground window leaves its Christmas lights above it")
             first.orderFrontRegardless()
-            layeredLights.reanchorDecoratedPanelsForTesting()
-            ids = orderedIDs()
-            check(ids.firstIndex(of: firstStrip.windowNumber)! < ids.firstIndex(of: first.windowNumber)! &&
-                  ids.firstIndex(of: first.windowNumber)! < ids.firstIndex(of: secondStrip.windowNumber)!,
+            check(waitForOrder { above(first.windowNumber, second.windowNumber, in: $0) }, "The Window Server accepts the focus change")
+            layeredLights.reanchorWindowPanelsForTesting()
+            check(waitForOrder { above(firstStrip.windowNumber, first.windowNumber, in: $0) &&
+                above(first.windowNumber, secondStrip.windowNumber, in: $0) },
                   "Changing focus immediately raises the newly focused lights and keeps the old strip behind")
             second.orderFrontRegardless()
+            check(waitForOrder { above(second.windowNumber, first.windowNumber, in: $0) }, "The chimney window is brought forward")
             let frontmostSanta = SnowStormController(settings: SnowStormSettings(),
                 screens: { [StaticEffectScreen(id: 1, frame: display.frame)] }, cursor: { nil },
                 query: { _, _ in [] }, automaticTicks: false, currentDate: { date(23) },
@@ -367,15 +380,11 @@ enum ChristmasTests {
             frontmostSanta.advanceForTesting(dt: 1.0 / 30, windows: [secondWindow], cursor: nil)
             frontmostSanta.triggerSanta()
             let santaLayer = frontmostSanta.santaPanelsForTesting.first
-            ids = orderedIDs()
-            let santaAboveFrontmost = santaLayer.flatMap { layer -> Bool? in
-                guard let santaIndex = ids.firstIndex(of: layer.windowNumber),
-                      let windowIndex = ids.firstIndex(of: second.windowNumber) else { return nil }
-                return santaIndex < windowIndex
-            } == true
             check(frontmostSanta.christmas.target == secondWindow.id &&
-                  ids.firstIndex(of: second.windowNumber)! < ids.firstIndex(of: first.windowNumber)! &&
-                  santaAboveFrontmost,
+                  waitForOrder { ids in
+                      above(second.windowNumber, first.windowNumber, in: ids) &&
+                      santaLayer.map { above($0.windowNumber, second.windowNumber, in: ids) } == true
+                  },
                   "Santa's flight layer stays above the frontmost chimney window")
         }
         today = date(24); controller.advanceForTesting(dt: 1.0 / 30, windows: windows, cursor: nil)
@@ -452,8 +461,93 @@ enum ChristmasTests {
         try previewYeti(root: root, windows: yetiWindows, screen: screen)
         print("\(checks) Christmas checks passed: stable decorations, Santa visits, rare and summoned Yeti encounters, window attachment, and cleanup.")
     }
+    private static func topEdgeChecks(check: (Bool, String) -> Void) {
+        guard let display = NSScreen.screens.first else { preconditionFailure("A native display is required") }
+        let host = NSWindow(contentRect: CGRect(x: display.frame.midX - 150,
+            y: display.visibleFrame.maxY - 400, width: 300, height: 180),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        host.title = "Christmas top-edge fixture"
+        host.orderFrontRegardless()
+        let controller = SnowStormController(settings: SnowStormSettings(decorations: true, lights: true),
+            screens: { [StaticEffectScreen(id: 1, frame: display.frame)] }, cursor: { nil },
+            query: { _, _ in [] }, automaticTicks: false)
+        defer { controller.shutdown(); host.orderOut(nil) }
+        for gap in [140.0, 80, 40, 0, 160] {
+            host.setFrameOrigin(CGPoint(x: host.frame.minX,
+                y: display.visibleFrame.maxY - gap - host.frame.height))
+            let window = SnowStormWindow(id: UInt32(host.windowNumber), owner: getpid(), frame: host.frame, level: 0)
+            for _ in 0..<2 {
+                controller.advanceForTesting(dt: 1.0 / 30, windows: [window], cursor: nil)
+                let strip = controller.allPanels.first { $0.frame.height == 106 + ChristmasDrawing.windowStripDrop }
+                check(strip.map { abs($0.frame.minY - (window.frame.maxY - ChristmasDrawing.windowStripDrop - 4)) < 0.001 } == true,
+                      "Native decorations stay attached with a roof \(gap) points below the menu bar, after ordering and updates")
+                check(controller.allPanels.contains { $0.frame == display.frame },
+                      "The snowfall field keeps the complete display frame near the top edge")
+            }
+        }
+    }
+    private static func windowSamplingChecks(screens: [StaticEffectScreen], windows: [SnowStormWindow],
+                                             check: (Bool, String) -> Void) {
+        let gate = DispatchSemaphore(value: 0)
+        let reads = Locked(0)
+        let completed = Locked(0)
+        var targets: [UInt32] = []
+        let survivor = windows[1]
+        let controller = SnowStormController(settings: SnowStormSettings(decorations: true, lights: true),
+            screens: { screens }, cursor: { nil }, query: { _, _ in
+                precondition(!Thread.isMainThread, "Window metadata must never block animation or input")
+                reads.withValue { $0 += 1 }
+                precondition(gate.wait(timeout: .now() + 5) == .success, "The test must release its background read")
+                completed.withValue { $0 += 1 }
+                return [survivor]
+            }, present: { _, target in if let target { targets.append(target.id) } },
+            presentField: { _, _ in }, automaticTicks: false)
+        defer { controller.shutdown() }
+        func pump(until condition: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(2)
+            repeat {
+                if condition() { return true }
+                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+            } while Date() < deadline
+            return condition()
+        }
+        controller.advanceForTesting(dt: 1.0 / 30, windows: windows, cursor: nil)
+        targets.removeAll()
+        controller.reanchorWindowPanelsForTesting()
+        check(pump { reads.snapshot == 1 }, "A click starts background window sampling")
+        var inputDelivered = false
+        DispatchQueue.main.async { inputDelivered = true }
+        check(pump { inputDelivered }, "The main run loop handles input while window sampling is stalled")
+        let time = controller.simulation.time
+        for _ in 0..<10 {
+            controller.advanceForTesting(dt: 1.0 / 30, windows: windows, cursor: nil)
+            controller.reanchorWindowPanelsForTesting()
+        }
+        var clicksDelivered = false
+        DispatchQueue.main.async { clicksDelivered = true }
+        check(pump { clicksDelivered } && reads.snapshot == 1 && targets.isEmpty &&
+              controller.simulation.time > time + 0.3,
+              "Snow animation continues and repeated clicks share one in-flight read")
+        gate.signal()
+        check(pump { reads.snapshot == 2 }, "Clicks during a read coalesce into one fresh follow-up sample")
+        check(targets.isEmpty, "A sample taken before the latest click does not reorder old hosts")
+        gate.signal()
+        check(pump { !targets.isEmpty }, "The completed click sample re-anchors surviving strips")
+        check(targets == [survivor.id], "A closed window is never used as a relative-order target")
+        controller.advanceForTesting(dt: 1.0 / 30, windows: [survivor], cursor: nil)
+        check(controller.allPanels.count == 2, "A closed decorated window releases its overlay on the next animation step")
+        targets.removeAll()
+        controller.reanchorWindowPanelsForTesting()
+        check(pump { reads.snapshot == 3 }, "A later click can sample again after the previous read finishes")
+        controller.shutdown()
+        gate.signal()
+        check(pump { completed.snapshot == 3 }, "An outstanding read can finish after shutdown")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        check(targets.isEmpty && controller.allPanels.isEmpty, "Late metadata cannot restore overlays after shutdown")
+    }
     private static func settingsChecks(root: URL, check: (Bool, String) -> Void) throws {
-        let prefs = PreferenceStore(defaults: MemoryDefaults())
+        let defaults = MemoryDefaults()
+        let prefs = PreferenceStore(defaults: defaults)
         prefs.set(StaticEffect.snowStorm.rawValue, for: .staticEffect)
         prefs.set(true, for: .suspended)
         let permissions = PermissionCoordinator(checkAccessibility: { false }, checkEventPosting: { false }, requestEventPosting: { false })
@@ -461,14 +555,49 @@ enum ChristmasTests {
         let runtime = RuntimeCoordinator(preferences: prefs, permissions: permissions, logger: logger)
         let context = SettingsContext(preferences: prefs, permissions: permissions, runtime: runtime,
                                       logger: logger, login: LoginService(preferences: prefs))
-        let page = VisualEffectsPageController(.visualEffects, context: context)
-        _ = page.view
-        let fireplace = page.controls["visualEffects.static.option.fireplace"] as! ActionButton
-        let decorations = page.controls["visualEffects.static.option.decorations"] as! ActionButton
-        let lights = page.controls["visualEffects.static.option.lights"] as! ActionButton
-        check(lights.superview?.superview === fireplace.superview && decorations.superview?.superview === fireplace.superview,
-              "Fireplace, Decorations, and Lights checkboxes share one horizontal row")
-        let snowRows = fireplace.superview!.superview as! NSStackView
+        let settings = SettingsWindowController(context: context)
+        let window = settings.window!
+        context.navigate?(SearchDestination(page: .visualEffects, controlID: ""))
+        window.layoutIfNeeded()
+        let page = window.contentViewController!.children.flatMap(\.children).compactMap { $0 as? VisualEffectsPageController }.first!
+        let options = page.controls["visualEffects.static.option.behindWindows"] as! SnowStormOptionsControl
+        defer { window.orderOut(nil); context.iconAbsorber.shutdown(); runtime.shortcuts.shutdown() }
+        let ids = ["behindWindows", "lights", "fireplace", "decorations"]
+        check(ids.allSatisfy { page.controls["visualEffects.static.option." + $0] === options },
+              "All four searchable options lead to one native segmented control")
+        check(options.trackingMode == .selectAny && options.segmentStyle == .rounded && options.borderShape == .roundedRectangle,
+              "Snow Storm uses independent native joined segments with rounded outside corners")
+        check((0..<4).map { options.label(forSegment: $0)! } == ["Background snowfall", "Lights", "Fireplace", "Decorations"],
+              "Full labels appear in the requested left-to-right order")
+        check((0..<4).allSatisfy { !options.isSelected(forSegment: $0) }, "The existing defaults remain all off")
+        let keys: [PreferenceKey] = [.stormBehindWindows, .stormLights, .stormFireplace, .stormDecorations]
+        func commit() { _ = options.sendAction(options.action!, to: options.target) }
+        let fireplaceSliders = ["fireplaceWidth", "fireplaceHeight", "fireplaceOffset"].map {
+            page.controls["visualEffects.static.option." + $0] as! NSSlider
+        }
+        for mask in 0..<16 {
+            for index in 0..<4 { options.setSelected(mask & (1 << index) != 0, forSegment: index) }
+            commit()
+            let configuration = StaticEffectConfiguration(preferences: prefs)
+            let reloaded = PreferenceStore(defaults: defaults)
+            check(keys.allSatisfy { reloaded.bool($0) == prefs.bool($0) }, "Combination \(mask) reloads the existing saved keys")
+            check(keys.enumerated().allSatisfy { prefs.bool($0.element) == (mask & (1 << $0.offset) != 0) } &&
+                  configuration.snowBehindWindows == (mask & 1 != 0) && configuration.lights == (mask & 2 != 0) &&
+                  configuration.fireplace == (mask & 4 != 0) && configuration.decorations == (mask & 8 != 0),
+                  "Combination \(mask) saves each original preference and immediately reaches the live configuration")
+            check(fireplaceSliders.allSatisfy { $0.isEnabled == (mask & 4 != 0) },
+                  "All Fireplace sliders immediately follow its segment in combination \(mask)")
+        }
+        prefs.batch { for key in keys { prefs.set(false, for: key) } }; page.refreshValues()
+        check((0..<4).allSatisfy { !options.isSelected(forSegment: $0) }, "External preference changes refresh every segment")
+        for (index, id) in ids.enumerated() {
+            let entry = context.catalog.search(SnowStormOptionsControl.options[index].label).first { $0.id == "visualEffects.static.option." + id }
+            check(entry?.value() == "Off", "The original search entry and current value survive for \(id)")
+            context.navigate?(SearchDestination(page: .visualEffects, controlID: "visualEffects.static.option." + id))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+            check(window.firstResponder === options, "Search focuses the native control for \(id)")
+        }
+        let snowRows = options.superview as! NSStackView
         let gust = page.controls["visualEffects.static.option.windgusts"] as! NSSlider
         let width = page.controls["visualEffects.static.option.fireplaceWidth"] as! NSSlider
         let height = page.controls["visualEffects.static.option.fireplaceHeight"] as! NSSlider
@@ -482,32 +611,60 @@ enum ChristmasTests {
         let heightIndex = snowRows.arrangedSubviews.firstIndex(of: settingsRow(for: height))!
         check(widthIndex == gustIndex + 1 && heightIndex == widthIndex + 1,
               "Fireplace Width and Height appear directly below Wind Gusts")
-        check(!prefs.bool(.stormDecorations) && !prefs.bool(.stormLights), "Decoration and light checkboxes default off")
-        decorations.state = .on; _ = decorations.sendAction(decorations.action!, to: decorations.target)
-        check(prefs.bool(.stormDecorations) && !prefs.bool(.stormLights), "Decorations saves independently of Lights")
-        lights.state = .on; _ = lights.sendAction(lights.action!, to: lights.target)
-        check(prefs.bool(.stormDecorations) && prefs.bool(.stormLights), "Lights saves independently of Decorations")
-        func views(_ parent: NSView) -> [NSView] { [parent] + parent.subviews.flatMap(views) }
-        let label = views(page.view).first { $0.identifier?.rawValue == "visualEffects.static.decorationsLabel" }!
-        let gesture = label.gestureRecognizers.compactMap { $0 as? NSClickGestureRecognizer }.first!
-        check(gesture.numberOfClicksRequired == 2 && gesture.target === page,
-              "Only a double-click on the Decorations text label is wired to Santa")
-        var summons = 0
-        let token = NotificationCenter.default.addObserver(forName: .santaRequested, object: prefs, queue: nil) { _ in summons += 1 }
-        defer { NotificationCenter.default.removeObserver(token) }
-        let handled = NSApp.sendAction(gesture.action!, to: gesture.target, from: gesture)
-        check(handled && summons == 1 && prefs.bool(.stormDecorations),
-              "The label's double-click action requests Santa without changing the checkbox")
-        let lightsLabel = views(page.view).first { $0.identifier?.rawValue == "visualEffects.static.lightsLabel" }!
-        let yetiGesture = lightsLabel.gestureRecognizers.compactMap { $0 as? NSClickGestureRecognizer }.first!
-        check(yetiGesture.numberOfClicksRequired == 2 && yetiGesture.target === page,
-              "Only a double-click on the Lights text label is wired to the Yeti")
-        var yetiSummons = 0
+        let segments = options.accessibilitySegments
+        check(segments.count == 4 && segments.enumerated().allSatisfy {
+            $0.element.accessibilityLabel() == options.label(forSegment: $0.offset)
+        }, "Native accessibility exposes all four full labels")
+        for index in [1, 3] {
+            // AppKit can report false even after performing the segment action.
+            // Verify the control state and persisted preference produced by it.
+            _ = segments[index].accessibilityPerformPress()
+            check(prefs.bool(keys[index]) && options.isSelected(forSegment: index),
+                  "Accessibility toggles \(keys[index].rawValue) independently")
+            _ = segments[index].accessibilityPerformPress()
+            check(!prefs.bool(keys[index]) && !options.isSelected(forSegment: index),
+                  "Accessibility can turn \(keys[index].rawValue) off again")
+        }
+        var summons = 0, yetiSummons = 0
+        let santaToken = NotificationCenter.default.addObserver(forName: .santaRequested, object: prefs, queue: nil) { _ in summons += 1 }
         let yetiToken = NotificationCenter.default.addObserver(forName: .yetiRequested, object: prefs, queue: nil) { _ in yetiSummons += 1 }
-        defer { NotificationCenter.default.removeObserver(yetiToken) }
-        let yetiHandled = NSApp.sendAction(yetiGesture.action!, to: yetiGesture.target, from: yetiGesture)
-        check(yetiHandled && yetiSummons == 1 && prefs.bool(.stormLights),
-              "The Lights label's double-click requests the Yeti without changing its checkbox")
+        defer { NotificationCenter.default.removeObserver(santaToken); NotificationCenter.default.removeObserver(yetiToken) }
+        window.orderFrontRegardless(); window.layoutIfNeeded()
+        func click(_ index: Int, count: Int) {
+            let frame = (options.accessibilitySegments)[index].accessibilityFrame()
+            let point = window.convertPoint(fromScreen: CGPoint(x: frame.midX, y: frame.midY))
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            let up = NSEvent.mouseEvent(with: .leftMouseUp, location: point, modifierFlags: [], timestamp: timestamp + 0.01,
+                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 0)!
+            NSApp.postEvent(up, atStart: true)
+            let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: timestamp,
+                                         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1)!
+            options.mouseDown(with: down)
+            // A shortcut consumes its down without native tracking the up.
+            if count == 2 { _ = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) }
+        }
+        for original in [false, true] {
+            for index in [1, 3] {
+                prefs.set(original, for: keys[index]); page.refreshValues()
+                click(index, count: 1)
+                check(prefs.bool(keys[index]) != original, "Single-click toggles its segment immediately")
+                click(index, count: 2)
+                check(prefs.bool(keys[index]) == original && options.isSelected(forSegment: index) == original,
+                      "A double-click shortcut preserves its original on/off preference")
+            }
+        }
+        check(summons == 2 && yetiSummons == 2, "Double-clicking Decorations summons Santa and Lights summons the Yeti")
+        RunLoop.main.run(until: Date().addingTimeInterval(1.6))
+        for (width, appearance) in [(960.0, NSAppearance.Name.aqua), (780.0, .aqua), (780.0, .darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            window.setContentSize(NSSize(width: width, height: 700)); window.layoutIfNeeded()
+            for index in 0..<4 { options.setSelected(index == 0 || index == 2, forSegment: index) }; commit()
+            let view = window.contentView!
+            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let name = "snow-settings-\(Int(width))-\(appearance.rawValue).png"
+            try bitmap.representation(using: .png, properties: [:])!.write(to: root.appendingPathComponent(name))
+        }
         let livePrefs = PreferenceStore(defaults: MemoryDefaults())
         livePrefs.set(StaticEffect.snowStorm.rawValue, for: .staticEffect)
         let live = StaticEffectsController(preferences: livePrefs, reducedMotion: { false }, screens: { [] },
