@@ -7,7 +7,7 @@ xcrun swiftc -swift-version 5 -target arm64-apple-macosx27.0 -sdk "$(xcrun --sho
     -module-cache-path "$TEST_ROOT/ModuleCache" -parse-as-library \
     -framework AppKit -framework ApplicationServices -framework ScreenCaptureKit \
     "$PROJECT_ROOT/Sources/Core/Preferences.swift" "$PROJECT_ROOT/Sources/Core/Geometry.swift" "$PROJECT_ROOT/Sources/Core/IconAbsorberSelection.swift" \
-    "$PROJECT_ROOT/Sources/Core/FileLogger.swift" "$PROJECT_ROOT/Sources/App/Permissions.swift" \
+    "$PROJECT_ROOT/Sources/Core/FileLogger.swift" "$PROJECT_ROOT/Sources/Core/SearchCatalog.swift" "$PROJECT_ROOT/Sources/App/Permissions.swift" \
     "$PROJECT_ROOT/Sources/IconAbsorber/AssertionClient.swift" "$PROJECT_ROOT/Sources/IconAbsorber/StatusItems.swift" \
     "$PROJECT_ROOT/Sources/IconAbsorber/StatusItemPictures.swift" "$PROJECT_ROOT/Sources/IconAbsorber/IconAbsorberController.swift" \
     "$PROJECT_ROOT/Tests/TestSupport.swift" "$PROJECT_ROOT/Tests/IconAbsorberTests.swift" -o "$TEST_ROOT/IconAbsorberTests"

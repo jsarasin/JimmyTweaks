@@ -7,7 +7,7 @@ Deliverable: a native Swift/AppKit utility; this document contains requirements,
 
 ## 1. Authority and product contract
 
-Jimmy Tweaks is a hidden, single-process macOS agent that provides system-wide window resizing and moving, with one native Settings window. Its second utility, **Reoccurring Scripts**, is strictly a **NONFUNCTIONAL UI STUB**.
+Jimmy Tweaks is a hidden, single-process macOS agent that provides system-wide window resizing and moving, with one native Settings window. **Recurring Requests** sends configurable HTTP/API calls manually or on optional schedules.
 
 This specification consolidates the current request and the finalized decisions retrievable from the referenced “macOS Window Resizing Utility” conversation. The retrieved conversation ends with the confirmed architectural choices and independent configurable moving threshold. The current request supplies the remaining binding scope. Details not expressly fixed by those sources are resolved here, especially in §16; they are implementation decisions, not claims about inaccessible earlier messages.
 
@@ -23,7 +23,7 @@ The implementation MUST deliver:
 - Command + right-button corner resizing, with Immediate activation by default and an adjustable threshold alternative.
 - Command + left-button interior moving, enabled by default, with its own adjustable 5-point threshold.
 - Plain-text normal logging retained for seven days, local UserDefaults preferences, optional Release-only launch at login, and direct Developer ID distribution with notarization.
-- A clearly labeled scripts preview with compact sample URL scripts, UI-only editing controls, and fictional sample history. It MUST have no scheduler, interpreter, script execution, URL fetching, or real run history.
+- Functional HTTP/API requests with configurable methods, headers, bodies, optional schedules, Run Once, and bounded response history. No interpreter or executable script downloads.
 
 No other functional utilities are part of this version. There is no menu-bar status item and no global shortcut for opening Settings. Runtime operation requires no account, network connection, analytics, or telemetry.
 
@@ -48,14 +48,14 @@ These are ordinary concrete types/files within the application target, not indep
 | Application coordinator | Startup, reopen, one Settings window, explicit quit, lifecycle shutdown |
 | Preference store | Typed defaults, validation, schema migration, change delivery, resets |
 | Runtime coordinator | Effective enablement, suspension, utility health, bounded recovery |
-| Permission coordinator | Trust/capability checks, startup requests, automatic monitoring |
+| Permission coordinator | Read-only trust/capability checks, startup information, explicit requests, automatic monitoring |
 | Window gesture controller | One event tap, gesture state, event ownership, physical-button tracking |
 | Accessibility window controller | Hit testing, target validation, frame reads/writes, geometry reconciliation |
 | Feedback controller | Optional cursor and nonactivating overlay lifetime |
 | Settings controllers | Split view, navigation table, page content, native search results |
 | Search metadata catalog | Stable control identifiers, descriptive metadata, destinations |
 | File logger | Serialized append, rotation, retention, opening current log |
-| Scripts preview model | In-memory demonstration rows and sample history only |
+| Recurring requests | Persistent request definitions, pure schedule calculations, app-owned transport, bounded real history |
 
 AppKit mutations MUST run on the main thread. Event interception MUST run on its own run-loop thread. Cross-process Accessibility work MUST run on a separate serial worker; it MUST NOT block the event callback or main thread. Logging uses a serial background writer. Share immutable preference/runtime snapshots with the event thread, and serialize gesture transitions on that thread.
 
@@ -97,7 +97,7 @@ One Accessibility request already executing may complete within its configured t
 
 When suspension is turned off, automatically start eligible enabled features. Missing permission and exhausted failure states remain visible. Turning suspension off MUST NOT erase a Failed state or create an unlimited retry loop; use **Retry** for an exhausted failure.
 
-Settings navigation, preference editing, permission guidance, log access, resets, and scripts preview editing remain available while suspended.
+Settings navigation, preference editing, permission guidance, log access, resets, and request configuration remain available while suspended.
 
 ### 3.3 Utility state and recovery
 
@@ -114,11 +114,11 @@ Window Move & Resize has one utility enable preference and separate Resize Windo
 | Starting | Engine startup or bounded recovery is in progress |
 | Running | Event engine operational; gesture-specific availability also shown |
 | Failed | Engine retries exhausted; expose reason, last failure time, Retry, and Open Log File |
-| UI Stub | Scripts preview only; never report Running or waiting for a scheduled run |
+| Request state | Manual, Scheduled, Running, Paused, Disabled, or Needs setup; separate from input-engine health |
 
 For app-owned engine faults, allow one initial attempt and up to three retries after 1, 2, and 4 seconds. Cap recoveries at three within any rolling 60-second interval, including event-tap disablement recovery. After exhaustion mark Failed and stop. A successful uninterrupted 60 seconds clears the burst counter. A deliberate Retry, or disabling then enabling the utility, begins a new user-requested attempt cycle.
 
-Permission denial, unsupported target windows, and target-app-specific Accessibility failures are not engine failures. Do not retry a denied permission automatically. An event tap disabled because the user or system has removed access must transition to Permission Required or Paused, as appropriate, rather than fighting the system. Recheck eligibility before every retry. The scripts stub has no retry mechanism.
+Permission denial, unsupported target windows, and target-app-specific Accessibility failures are not engine failures. Do not retry a denied permission automatically. An event tap disabled because the user or system has removed access must transition to Permission Required or Paused, as appropriate, rather than fighting the system. Recheck eligibility before every retry. HTTP requests have no automatic application-level retry mechanism.
 
 ## 4. Settings interface
 
@@ -126,7 +126,7 @@ Permission denial, unsupported target windows, and target-app-specific Accessibi
 
 Create exactly one resizable Settings `NSWindow`, initially approximately 960 × 700 points, minimum 780 × 560 points. Save the window frame using standard AppKit frame autosaving; repair a saved frame that lies entirely off the current displays. Support standard keyboard navigation, resizing, scrolling, light/dark appearance, increased contrast, and Reduce Motion.
 
-The root content controller MUST be `NSSplitViewController`. The left sidebar MUST use a view-based `NSTableView` with native selection and group rows. The detail pane uses concrete AppKit view controllers and programmatic Auto Layout. Tables for search results, script rows, and sample history MUST also be native `NSTableView` instances. See [NSSplitViewController](https://developer.apple.com/documentation/appkit/nssplitviewcontroller) and [NSTableView](https://developer.apple.com/documentation/appkit/nstableview).
+The root content controller MUST be `NSSplitViewController`. The left sidebar MUST use a view-based `NSTableView` with native selection and group rows. The detail pane uses concrete AppKit view controllers and programmatic Auto Layout. Tables for search results, request rows, and run history MUST also be native `NSTableView` instances. See [NSSplitViewController](https://developer.apple.com/documentation/appkit/nssplitviewcontroller) and [NSTableView](https://developer.apple.com/documentation/appkit/nstableview).
 
 Sidebar order:
 
@@ -136,7 +136,7 @@ Sidebar order:
 4. **Visual Effects**.
 5. **Icon Absorber**.
 6. **Custom Shortcuts**.
-7. **Reoccurring Scripts**.
+7. **Recurring Requests**.
 8. **Logging**.
 9. **About**.
 
@@ -151,24 +151,24 @@ Display, in this order:
 - A large overall state summary and the current Suspend All state.
 - This explanatory copy: **“Jimmy Tweaks runs in the background. Closing Settings does not stop enabled features. To change settings, open Jimmy Tweaks again from Applications.”**
 - Window Move & Resize state, configured utility switch, individual resizing/moving states, and any blocking permission or failure.
-- Reoccurring Scripts with **“NONFUNCTIONAL UI STUB — examples only; nothing runs.”** Do not give it a functional runtime switch here.
+- Recurring Requests with its own enable switch, runtime status, and optional schedules.
 - Permission summary with **Open Permission Assistant** and **Review Permissions** actions.
 - Failed-feature recovery actions, when applicable.
 - **Open Log File** and links to the applicable Settings pages.
 
-A fully running utility can still have one gesture disabled. Show “Running — resizing only” or “Running — moving only” as appropriate. If both are disabled, show “Disabled — both gestures off.” Overall state MUST NOT count the scripts stub as a working or failed background utility.
+A fully running utility can still have one gesture disabled. Show “Running — resizing only” or “Running — moving only” as appropriate. If both are disabled, show “Disabled — both gestures off.” Request status is independent of the window input engine.
 
 ### 4.3 Other pages
 
 | Page | Required content |
 | --- | --- |
 | Window Move & Resize | Utility switch; shared Activation Areas section; Resize Windows section; Window Moving section; cursor preference; gesture explanations; current capability state; Reset Window Move & Resize |
-| Reoccurring Scripts | Permanent stub banner; compact sample list; selected sample detail; UI-only controls; Sample Run History; Reset Scripts Preview |
+| Recurring Requests | Enable switch; saved requests; HTTP editor; optional schedule; Run Once; real history and response inspector; reset |
 | General | Menu bar icon, suspension, Release-only Launch at Login preference; background/reopen explanation |
 | Visual Effects | Framed Move/Resize and Static sections; gesture effect switches, styles, hints, outline, and animation; persistent screen-wide effect selector with fixed-height configuration area |
-| Permissions | Current permission/capability states; why each is needed; Open System Settings; automatic status checks; app-scoped permission reset for testing |
+| Permissions | Current permission/capability states; why each is needed; Open System Settings; automatic status checks; app-scoped fresh-install reset with worker removal |
 | Logging | Fixed Normal logging and seven-day retention explanation; current file path; Open Log File; Reveal Logs Folder; I/O error state |
-| About | Jimmy Tweaks name, app version/build, minimum supported macOS, concise feature description, local-only operation statement |
+| About | Jimmy Tweaks name, app version/build, minimum supported macOS, concise feature description, configured-request networking statement |
 
 Do not add runtime modes or environment management to these pages. General is the home for the single compile-time-gated login preference, not a build-management interface.
 
@@ -176,7 +176,7 @@ Do not add runtime modes or environment management to these pages. General is th
 
 ### 5.1 Catalog contract
 
-Every user-facing preference and actionable control MUST have metadata, including page links, transient assistant buttons, search controls, reset actions, script preview fields, and persistent chrome actions. Read-only status groups and table destinations also need entries so users can discover their explanations.
+Every user-facing preference and actionable control MUST have metadata, including page links, transient assistant buttons, search controls, reset actions, request fields, and persistent chrome actions. Read-only status groups and table destinations also need entries so users can discover their explanations.
 
 Each entry contains:
 
@@ -184,14 +184,14 @@ Each entry contains:
 | --- | --- |
 | Stable ID | Unique, nonlocalized identifier, independent of the visible label |
 | Label | Localized visible control or destination name |
-| Description | Plain-language explanation of effect, limits, or stub behavior |
+| Description | Plain-language explanation of effect and limits |
 | Keywords | Synonyms, abbreviations, alternative spellings, gesture terms |
 | Destination | Page ID, section ID, and control/focus ID; presentation action for transient UI |
 | Breadcrumb | For example, Window Move & Resize › Window Moving › Drag Threshold |
 | Availability | Enabled/disabled/conditional, with explanation; dynamically evaluated |
 | Value summary | Safe human-readable current value where meaningful |
 
-Stable IDs may share a destination when multiple discoverability terms describe one control. User-entered script content, arbitrary URL values, window titles, and logs MUST NOT be incorporated into the global Settings index. Catalog the script fields and fixed sample titles; local table selection is separate from global Settings search.
+Stable IDs may share a destination when multiple discoverability terms describe one control. User-entered script content, arbitrary URL values, window titles, and logs MUST NOT be incorporated into the global Settings index. Catalog request controls using generic labels; local request selection is separate from global Settings search.
 
 ### 5.2 Matching and result behavior
 
@@ -199,7 +199,7 @@ Stable IDs may share a destination when multiple discoverability terms describe 
 - Trim leading/trailing whitespace; normalize case and diacritics. An empty/whitespace query restores normal detail content and the preceding page/scroll position.
 - Split nonempty queries on whitespace. Every token must match at least one metadata field in an entry; tokens may match different fields. Match substrings; do not add fuzzy matching or remote search.
 - Rank exact label matches first, label prefixes second, remaining label matches third, descriptions fourth, and keywords/breadcrumbs fifth; resolve ties by sidebar order, section order, then label. Use the weakest matching token to determine a multi-token entry's tier.
-- Present results in a native table in the detail pane, keeping the sidebar, search field, Status navigation, and Suspend All visible. Each row shows label, breadcrumb, a concise description, and unavailable/stub state when relevant.
+- Present results in a native table in the detail pane, keeping the sidebar, search field, Status navigation, and Suspend All visible. Each row shows label, breadcrumb, a concise description, and unavailable state when relevant.
 - Up/Down selects results while search is focused. Return opens the selected result; if none is selected, select and open the first result. Clicking a result does the same. Tab can move into the results table.
 - Opening a result clears the query, navigates to its page, expands the destination section, scrolls the control into view, gives it keyboard focus when appropriate, and highlights it for about 1.5 seconds. Use a static outline when Reduce Motion is enabled.
 - Navigation never activates the destination action or changes a preference. Searching “reset” must never reset anything. Searching for assistant controls opens the assistant and focuses the appropriate step/control without requesting permission automatically.
@@ -217,7 +217,7 @@ The following IDs define the minimum catalog; §10 and §13 give their full beha
 | `global.search`, `global.search.clear` | Search / find, filter, no results |
 | `global.suspendAll`, `global.resumeAll`, `global.quit` | Persistent controls / pause, stop, resume, exit |
 | `navigation.{pageID}` | Every selectable sidebar destination |
-| `status.background`, `status.windowState`, `status.scriptsState` | Status / hidden, running, failed, examples |
+| `status.background`, `status.windowState`, `status.scriptsState` | Status / hidden, running, failed, requests |
 | `status.retryWindowEngine`, `status.openAssistant`, `status.reviewPermissions`, `status.openLog` | Status actions |
 | `window.enabled`, `window.resize.enabled`, `window.resize.activation`, `window.resize.threshold` | Resizing / Command, cmd, right click, corner, immediate, small drag |
 | `window.edgeZoneSize` | Shared activation areas / edge, corner size, boundary, resize, move, centre, points |
@@ -228,8 +228,8 @@ The following IDs define the minimum catalog; §10 and §13 give their full beha
 | `permissions.{capability}`, `permissions.{capability}.open`, `permissions.reset` | Permissions / access, trust, monitoring, setup |
 | `assistant.{stepID}.{actionID}` | Appropriate assistant step / back, next, skip, grant, check, finish |
 | `logging.status`, `logging.retention`, `logging.path`, `logging.open`, `logging.reveal` | Logging / normal, seven days, plain text, logfile |
-| `scripts.previewEnabled`, `.list`, `.add`, `.duplicate`, `.remove`, `.name`, `.url`, `.interval`, `.runPreview`, `.history`, `.clearHistory`, `.reset` | Scripts / recurring, reoccurring, schedule, URL, example, simulated |
-| `scripts.row.{previewID}.enabled` | Per-row Enabled in Preview control; fixed seed IDs or unique in-memory preview IDs |
+| `scripts.enabled`, `.list`, `.add`, `.duplicate`, `.remove`, `.name`, `.url`, `.method`, `.schedule`, `.run`, `.history`, `.clearHistory`, `.reset` | Requests / recurring, reoccurring, HTTP, API, manual, schedule, response |
+| `scripts.request.{UUID}` | Generic request-selection destination; no user content in the index |
 | `reset.{scope}.confirm`, `reset.{scope}.cancel` | Corresponding reset dialog; discover through its parent reset destination without confirming |
 | `about.version`, `about.platform` | About / version, build, macOS |
 
@@ -277,34 +277,29 @@ Disabling makes the current brick poses break apart and fade into an expanding g
 
 ### 6.1 Permission policy
 
-Accessibility trust is required for cross-application frame manipulation and the active filtering event tap. After startup initialization, request missing Accessibility, Input Monitoring, and Screen Recording access once per process launch using the native permission APIs. Skip existing grants. Ordinary monitoring checks status without repeating these startup requests. macOS controls approval and whether a previously denied request displays a prompt; users may need to enable the app in System Settings.
+Accessibility trust is required for cross-application frame manipulation and the active filtering event tap. Never request permissions during startup or status checks. On every process launch, including login launches, show one information dialog listing the unapproved permission panels, with an OK button; omit it when all needed access is covered. Input Monitoring is omitted when broader Device Control and Data Access already covers listening. Request missing access only from the corresponding explicit Request button using the native permission APIs. Skip existing grants for Accessibility and screen capture and permit explicit retries. Input Monitoring requests always invoke IOHIDRequestAccess, including when the native listening check already succeeds through broader access. Request input-posting access only from the Device Control and Data Access Request action once Accessibility trust is available. macOS controls approval and whether a previously denied request displays a prompt; users may need to enable the app in System Settings.
 
 Use a modifying session event tap rather than a passive global monitor because gesture ownership requires suppressing selected mouse events. Apple's documented security distinction assigns modifying event taps to Accessibility authorization and passive listening to Input Monitoring. **Do not blindly require both permissions.** See [Advances in macOS Security](https://developer.apple.com/videos/play/wwdc2019/701/).
 
 Input Monitoring supports Transparent shortcuts and the global recorder; it is not an additional prerequisite for the window capture path. Already-granted Accessibility may also permit observation. A failed tap alone is insufficient evidence that Input Monitoring is missing: distinguish trust, session availability, tap creation errors, and OS policy using documented capability checks. Do not fabricate a definitive diagnosis.
 
-Screen Recording supports Icon Absorber’s optional original menu-bar icon pictures; denial retains application-icon fallback and does not block window gestures. Requesting permission does not capture an image. No permission is requested for the scripts stub, Apple Events automation of other apps, filesystem-wide access, or notifications. Receiving the application's own launch event is not automation of another application.
+Screen Recording supports Icon Absorber’s optional original menu-bar icon pictures; denial retains application-icon fallback and does not block window gestures. Requesting permission does not capture an image. No Accessibility permission is requested for HTTP requests, Apple Events automation of other apps, filesystem-wide access, or notifications. Receiving the application's own launch event is not automation of another application.
 
 Use OS-visible permission category names appropriate to the supported version/localization. “Accessibility” in this document names the API capability; explanatory copy must not rely on one permanently fixed System Settings label or pane URL. System Settings deep links are best effort; always provide a textual Privacy & Security navigation fallback. Permission grants remain user actions in System Settings.
 
-### 6.2 Guided flow
+### 6.2 Permissions pane
 
-Present a native sheet on the single Settings window, with a visible step title and progress indicator. It is modeless with respect to background operation but follows normal sheet interaction rules. Repeated launch requests bring forward the same assistant; they do not create another one.
+Use the System Settings panel names for the three sections: **Device Control and Data Access**, **Input Monitoring**, and **Screen & System Audio Recording**. Keep internal permission identifiers stable and retain older terminology as search keywords.
 
-| Step | Required content and actions |
-| --- | --- |
-| Welcome | Explain background operation, reopen through Applications, gestures, and why permission is needed; Next and Skip Setup |
-| Accessibility | Live status; concise explanation; Enable Accessibility / Open System Settings; Check Again; Back, Next, Skip Setup |
-| Additional capture access, only if required | Explain the actual additional capability; request/open-settings actions; live status; Back, Next, Skip Setup |
-| Review | Show configured resizing/moving, suspension state, permission readiness, and scripts stub label; Finish, Back, Skip Setup |
+Each section displays its live status above a horizontal row of **Open [panel name]**, **Request [panel name]**, and **Check for approval**. Wrap button labels so all three fit at the current default and minimum window widths. Open navigates to System Settings without requesting access. Request calls only that section's native permission API and rechecks the observed grant; a request result alone is not approval. Check for approval immediately checks and updates status without requesting access. Granted/ready status is green; missing access is orange. If Device Control and Data Access is approved but input control is unavailable, show an orange explanation with Request/restart guidance.
 
-A missing grant MUST NOT trap users in the assistant: Next and Finish remain possible and explain that affected features stay inactive. Skip Setup and closing the sheet save “skipped” state, dismiss the flow, and leave Settings usable. A completed or skipped assistant MUST NOT automatically reappear on every launch. **Open Permission Assistant** is always available from Status and Permissions; it rechecks actual grants and starts at the first unmet step, or Review if ready.
+Input Monitoring is an optional alternative for listening without broader device control. Its Request action always invokes the native API and then opens Input Monitoring settings, with visible guidance and the current app path if no prompt appears or the app is missing from the list. Native listening checks do not prove a separate Input Monitoring switch is approved; show “Covered by Device Control and Data Access” for broader access, otherwise report available input observation or missing access.
 
-Do not store “granted” as a preference. Store only assistant version and completion/skipped state. When a grant becomes available, automatically activate enabled features if not suspended or in exhausted Failed state. Do not require an application restart unless the OS actually makes it necessary; if a valid grant still cannot be used, show a recoverable explanation and the manual quit/reopen route.
+The launch information dialog lists only uncovered permissions; input-control readiness is a separate capability, not a fourth approval. Dismissing the dialog leaves Settings and available background features usable. No grant is stored as a preference. When a grant becomes available, automatically activate eligible enabled features unless suspended or in an exhausted Failed state. If macOS requires a restart, explain the manual quit/reopen route.
 
 ### 6.3 Rechecks and revocation
 
-Recheck on application activation, return from System Settings, session resume, and relevant tap/Accessibility errors. Poll every two seconds while Permissions is visible and any permission/capability is missing, slowing to 30 seconds once all are granted. Closing/minimizing Settings, searching, or navigating away ends detailed polling. In the background, check every 30 seconds while the input engine is eligible and ready, or every two seconds while core access is missing. There is no background permission timer while all functional utilities are disabled or suspended; recheck before resume. There is no manual Check Permissions Again button.
+Recheck on application activation, return from System Settings, session resume, and relevant tap/Accessibility errors. Poll every two seconds while Permissions is visible and any permission/capability is missing, slowing to 30 seconds once all are granted. Closing/minimizing Settings, searching, or navigating away ends detailed polling. In the background, check every 30 seconds while the input engine is eligible and ready, or every two seconds while core access is missing. There is no background permission timer while all functional utilities are disabled or suspended; recheck before resume. Each permission section also provides a read-only Check for approval button for an immediate refresh.
 
 On revocation, close the admission gate, end any current operation at the last frame, clear feedback, drain event ownership where possible, and display Permission Required. Do not display repeated alerts or repeatedly reopen System Settings. System-enforced tap shutdown may prevent perfect draining; the cleanup constraints in §9 apply.
 
@@ -540,7 +535,7 @@ Persist application preferences in the application's standard UserDefaults domai
 | `onboarding.assistantDisposition` | String enum | `notStarted`, then `skipped` or `completed` |
 | Standard AppKit frame-autosave data | AppKit-managed | No initial saved frame |
 
-UI selection, search text/results, current gesture, runtime failure counters, permission grants, sample edits, and sample history are not saved as functional preferences. Keep scripts preview data in memory; reseed on application process launch or Reset Scripts Preview. Closing/reopening Settings within the same process retains preview edits.
+UI selection, search text/results, current gesture, runtime failure counters, and permission grants are not saved as functional preferences. Request definitions and bounded response history persist in private Application Support storage.
 
 Reject wrong types, unknown enum cases, and nonfinite numeric input. Clamp numeric values loaded from preferences to documented limits; show a one-time nonblocking diagnostic if repair was needed and log the repair. User-entered out-of-range numbers are rejected inline rather than silently clamped. A malformed key must not crash startup or reset unrelated preferences.
 
@@ -551,7 +546,7 @@ Schema migrations are small, ordered transformations in the preference store. Pr
 All resets use a native confirmation sheet identifying the exact scope, with Reset and Cancel. Navigation to a reset result never confirms it.
 
 - **Reset Window Move & Resize:** end an active gesture at its accepted frame, restore only `windowResizer.*`, and reconcile eligibility. Preserve master suspension, login intent, assistant state, and logs.
-- **Reset Scripts Preview:** recreate the fixed sample rows/history and preview controls in memory; this has no functional runtime effect.
+- **Reset Recurring Requests:** cancel requests, remove definitions/history, and disable the module.
 - General has no Reset All Preferences action or corresponding search destinations.
 
 Cancel performs no mutation. Apply a reset as one coordinated state change to avoid briefly starting features between individual key changes.
@@ -576,59 +571,11 @@ Sign with Developer ID Application, enable Hardened Runtime, include secure time
 
 Test a quarantined download on a clean user account or Mac, including first launch, installation in Applications, permission grant, silent login launch, reopen, and explicit quit. Test offline opening of the stapled distribution. Manual installation of a newly distributed application version is sufficient for this product scope.
 
-## 13. Reoccurring Scripts — NONFUNCTIONAL UI STUB
+## 13. Recurring Requests
 
-### 13.1 Hard boundary
+The former Reoccurring Scripts preview is replaced by functional HTTP/API requests. No executable scripts are downloaded or launched. The complete behavior, controls, lifecycle, validation, data retention, and HTTP limits are specified in [Recurring Requests](Docs/RecurringRequests.md).
 
-This page demonstrates a possible future interface only. It MUST NOT schedule or execute anything. Do not add a timer that represents a schedule, background task registration, shell/interpreter calls, subprocess creation, AppleScript evaluation, URL retrieval, script download, notification, or real success/failure result. Do not create a scheduler or execution service with empty implementations “for later.” There is no functional scripts subsystem in this version.
-
-Maintain this permanent page banner: **“NONFUNCTIONAL UI STUB. These are sample scripts and sample results. Nothing is downloaded, scheduled, or executed.”** Status, search results, and all action feedback must retain this distinction. The global Suspend All preference does not prevent preview editing because editing has no background behavior.
-
-### 13.2 Compact sample list and detail
-
-Use a compact native table with approximately 32-point rows, single-line name, abbreviated URL, and a short **Sample** badge. Keep full URLs in the detail field/help rather than creating oversized cards. Include these fixed seed examples using reserved documentation domains:
-
-| Stable sample ID | Name | Sample script URL | Interval label |
-| --- | --- | --- | --- |
-| `sample.cleanup` | Temporary File Cleanup | `https://example.com/scripts/cleanup.sh` | Every 1 hour |
-| `sample.backup` | Notes Backup | `https://example.org/scripts/backup.sh` | Every 6 hours |
-| `sample.health` | System Health Check | `https://example.net/scripts/health-check.sh` | Every 30 minutes |
-
-These are illustrative URL strings, not working endpoints. Never resolve, fetch, preview, or open them in a browser. Do not create clickable links that imply executable sample content exists.
-
-The selected-row detail contains Name, Script URL, Interval, and an Enabled toggle labeled **Enabled in Preview**. The page-level toggle is **Enable Scripts Preview**, default off. Neither toggle changes runtime health, permissions, login behavior, or creates work. Preserve the selected sample's values while the page-level toggle is off and explain the preview dependency.
-
-### 13.3 UI-only controls
-
-| Control | Allowed behavior |
-| --- | --- |
-| Enable Scripts Preview | Enables/disables demonstration editing; no functional activation |
-| Enabled in Preview | Changes a row's in-memory check state only |
-| Add Sample | Adds an in-memory sample row with a unique preview ID; no file/URL access |
-| Duplicate | Duplicates the selected preview row in memory |
-| Remove | Removes the selected row from the preview; no file deletion |
-| Name | Editable plain text, 1–80 characters after trimming |
-| Script URL | Editable HTTPS URL string with a host, max 2,048 characters; syntax validation only |
-| Interval | Popup: Every 5 minutes, Every 30 minutes, Every 1 hour, Every 6 hours, Every day; informational only |
-| Run Now (Preview Only) | Shows “Preview only — nothing was executed.” No run record is appended |
-| Clear Sample History | Clears only in-memory fictional history; does not clear the application log |
-| Reset Scripts Preview | Restores seed data and sample history after confirmation |
-
-Disable selected-row controls when no row is selected; announce the reason. A malformed URL gets an inline validation message but is never tested over the network. Add, duplicate, remove, and field edits take effect immediately in the preview. Removing the last row shows **“No sample scripts. Add a sample to explore the preview.”** with Add Sample; it must not imply scripts are waiting to be scheduled.
-
-### 13.4 Sample Run History
-
-Heading: **Sample Run History**. Explanation: **“Fictional examples shown for layout only. No scripts have run.”** Use a native table with Example Time, Script, Sample Result, and Sample Duration.
-
-Seed three static rows:
-
-| Example Time | Script | Sample Result | Sample Duration |
-| --- | --- | --- | --- |
-| Example day · 09:00 | Temporary File Cleanup | Sample success | 0.4 seconds |
-| Example day · 08:30 | System Health Check | Sample failure | 1.2 seconds |
-| Example day · 06:00 | Notes Backup | Sample skipped | — |
-
-Use static example times, not the current date or a live countdown. No Next Run, actual execution timestamp, actual output, or live progress indicator is permitted. Historical sample rows retain their sample names if a preview script is renamed or removed. Empty history reads **“No sample history. Nothing has been executed.”** with Reset Scripts Preview as the repopulation action. All changes disappear on process restart.
+The module starts disabled with no sample requests or fictional history. New requests are Manual Only. Run Once works without a schedule when the module is enabled and Suspend All is off. Optional interval and daily local-time scheduling belongs to the application process; no request worker or background transfer session may outlive Quit. Missed runs are skipped.
 
 ## 14. Logging and local data
 
@@ -643,7 +590,7 @@ Each line includes an ISO 8601 UTC timestamp, severity, component, stable event 
 - Gesture start/end/cancel, operation kind, selected corner, duration, and coarse failure category.
 - AX errors, unsupported-target summaries, event-tap disablement, restoration failure, and log I/O errors.
 
-Do not log every pointer sample or geometry write. Rate-limit repeated target errors to one detailed entry per target/error category per 60 seconds, with a count summary. Avoid retaining window references just for logging. Sample UI interactions may log an explicit `preview` action if useful, but never record them as script runs.
+Do not log every pointer sample or geometry write. Rate-limit repeated target errors to one detailed entry per target/error category per 60 seconds, with a count summary. Avoid retaining window references just for logging. HTTP request payloads and responses are excluded from general logs.
 
 Do not log typed keys, window titles, document names, window contents, full pointer traces, user-entered script URLs/content, credentials, or personal file paths. A target bundle identifier and AX error code are sufficient for routine compatibility diagnostics. Logs stay local and are never uploaded automatically.
 
@@ -659,7 +606,7 @@ Logging failure MUST NOT stop window manipulation. Keep a bounded in-memory diag
 
 ### 14.3 Data inventory
 
-Persistent local data comprises UserDefaults, Settings frame-autosave data, and retained log files only. Runtime caches contain transient AX references and geometry; clear them on relevant process/session changes. Scripts examples and edits are in-memory only. No screen capture, script payload storage, external synchronization, or remotely stored settings are needed.
+Persistent local data includes UserDefaults, Settings frame-autosave data, retained logs, and app-owned request definitions and bounded responses. Runtime caches contain transient AX references and geometry; clear them on relevant process/session changes. Request payloads remain local except when sent to the configured endpoint.
 
 ## 15. Focused verification and acceptance criteria
 
@@ -667,7 +614,7 @@ Persistent local data comprises UserDefaults, Settings frame-autosave data, and 
 
 Use deterministic tests for geometry, gesture state/event ordering, preference validation, search matching/navigation metadata, retry budgets, and log retention. Use a small native test window fixture capable of accepting, clamping, rejecting, delaying, and invalidating AX attributes. The fixture is test tooling, not a shipped helper. Test real application compatibility manually on supported macOS 27 hardware; do not substitute synthetic tests for permission, cursor, or target-app behavior.
 
-Avoid broad UI snapshot suites. A compact smoke test for Settings navigation, search empty state, persistent suspension, and scripts stub boundaries is sufficient, supplemented by the targeted matrix below. Tests must exercise outcomes and event invariants rather than mirror internal class structure.
+Avoid broad UI snapshot suites. A compact smoke test for Settings navigation, search empty state, persistent suspension, and request lifecycle boundaries is sufficient, supplemented by the targeted matrix below. Tests must exercise outcomes and event invariants rather than mirror internal class structure.
 
 ### 15.2 Required acceptance matrix
 
@@ -697,8 +644,8 @@ Avoid broad UI snapshot suites. A compact smoke test for Settings navigation, se
 | A22 | Native UI accessibility | Keyboard-only navigation, VoiceOver labels/values/reasons, light/dark, increased contrast, Reduce Motion; all content reachable at minimum window size |
 | A23 | Preferences/reset | Immediate application; range/type repair; unknown enums; scope-correct resets; Cancel no-op; reset does not erase permission grants/logs |
 | A24 | Login preference | Exists only in eligible Release app; actual OS registration reflected; silent startup honors suspension; user OS changes not overridden |
-| A25 | Scripts boundary | Every control changes only preview state or explicit preview feedback; URLs never fetched/opened; no schedule, execution, real history, or background work after leaving page |
-| A26 | Scripts presentation | Compact sample URLs, permanent stub labels, fictional static history, row/history empty states, seed reset and process restart behavior |
+| A25 | Request lifecycle | Run Once and schedules send configured HTTP requests; suspension, sleep, removal, and Quit cancel work; no request worker outlives Quit |
+| A26 | Request presentation | Manual/default state, HTTP editor, optional schedules, real response history, validation, empty states, reset, and persistence |
 | A27 | Logging | Plain-text file opens; retention/segments/cutoff verified with a controlled clock; no pointer/key/content leakage; I/O failure nonfatal |
 | A28 | Distribution | Correct signature, Hardened Runtime, notarization and stapling; clean-account quarantined and offline launch; installed reopen/login behavior |
 
@@ -715,7 +662,7 @@ Test ordinary Command-click and rapid double-click sequences with a mouse and a 
 - On the cooperative fixture, target pointer-to-accepted-frame latency is ≤50 ms p95 during ordinary dragging. Treat the 180 ms admission deadline separately. Report real-app latency rather than claiming the same guarantee for unresponsive targets.
 - No unbounded event buffers, retry loops, retained AX objects, or growth in overlay windows across 500 consecutive gestures.
 - Settings remains responsive during target AX stalls, log failures, and retries. Suspension and Escape must enqueue termination without waiting on AX.
-- The scripts page creates no repeating work or network traffic before, during, or after preview interactions.
+- Request work requires an enabled module and an explicit Run Once or enabled due schedule. Quit leaves no request timers or transfers.
 
 ## 16. Resolved edge decisions and platform constraints
 
@@ -739,7 +686,7 @@ The following choices make unspecified behavior concrete and are normative for t
 | Feedback defaults | Cursor and corner hints on; active window outline off |
 | Permission recovery | Automatic when enabled/eligible; no forced restart by design; no repeated automatic prompting |
 | Engine failure | Three bounded retries, then visible Failed; target-specific unsupported behavior is not a global engine fault |
-| Preview persistence | In-memory for the current process only; no background scripts behavior |
+| Request persistence | Private local definitions and bounded response history; no workers or transfers after Quit |
 | Log retention | Rolling seven-day cutoff; delete expired closed segments, prune the boundary segment, run cleanup hourly and at startup |
 | First-run guidance | First deliberate open only; skipped/completed state saved; relaunchable at any time |
 
@@ -757,8 +704,21 @@ The application is ready for delivery only when:
 4. All four anchored resize corners, independent moving, event ownership, replay, termination, and failure paths satisfy the focused tests.
 5. Optional cursors/overlays never intercept input or activate the target.
 6. Defaults, resets, normal logging, logfile opening, retention, and Release-only login preference meet this specification.
-7. The scripts page is visibly a stub and inspection confirms there is no scheduler or execution path.
+7. Recurring Requests sends configured HTTP requests, supports manual-only operation, and cancels all requests/timers on Quit.
 8. The signed and notarized distribution passes installation, clean launch, reopen, login, and offline validation.
 9. Observed target-app compatibility limits and the tested OS/toolchain/reference hardware are recorded with the delivered build.
 
 No application code is included in this specification deliverable.
+
+
+## 18. Awake & Sleep and installation lifecycle
+
+Awake & Sleep is a separate Activity with matching J-menu controls. Keep Awake presets are 30 minutes, 1, 2, 3, and 5 hours plus Indefinitely; Sleep After and Shut Down After presets are 1, 5, 10, and 30 minutes plus 1, 3, 5, and 10 hours. All three provide Custom hours/minutes. Run one session at a time with monotonic deadlines, visible remaining time, cancellation, and optional saved Keep Display Awake (off by default). Sleep/shutdown sessions prevent idle sleep and show a cancellable warning during their final 30 seconds. Keep Awake expiry only releases sleep prevention. Quit, suspension, logout/session switching, or actual sleep cancels the session; never execute an overdue action on wake or relaunch.
+
+Use IOKit assertions for idle system/display sleep. Closed-lid support is optional and requires an administrator-approved, notarized SMAppService launch daemon. Its authenticated XPC interface only acquires, renews, releases, or prepares to remove a lease. Preserve and journal the previous SleepDisabled value before using fixed `pmset -a disablesleep` arguments. Renew every five seconds, expire after twenty seconds without renewal, and restore after termination, crash/restart, cancellation, or uninstall. Remove the journal and its private root-owned directory after successful restoration. Never expose arbitrary root commands. Report failures and unsupported configurations. Manual Stop & Sleep Now releases the override before requesting sleep. For shutdown, send the standard loginwindow event while retaining the override to avoid sleeping a closed laptop before the request is delivered; release on termination, cancellation/failure, or after thirty seconds if shutdown did not complete. Never force power-off.
+
+Before starting feature controllers, retire older app instances with the same bundle identity. Track the bundled helper's code hash and app location; for updates restore/quiesce, await completed unregistration, then register the replacement. Persist interrupted re-registration intent for retry. Do not install a previously unconfigured worker or clear user preferences during a normal update.
+
+The Service Management `notFound` status is not proof of a previous installation. Do not automatically unregister or register a missing helper at launch. Defer replacement while approval is required, including when consent was revoked. Preserve genuine interrupted-update intent, discard legacy retry flags without an installation record, and still require recovery when a missing/unapproved helper has an unresolved sleep-restoration journal.
+
+Permissions exposes **Reset permissions and uninstall workers**. Its confirmed action stops features and owned actions, restores sleep settings/absorbed icons, removes power/login registrations, resets only this app's TCC permissions, closes logging permanently, removes the app's preference domain, logs, caches, and saved application state, and quits. Keep the app bundle. If worker removal or permission reset fails, report the remaining work and preserve saved preferences for retry. This supersedes the earlier permission-only testing reset; other applications and macOS audit/history records are outside the cleanup boundary.

@@ -51,13 +51,13 @@ import AppKit
             scanCount.withValue { $0 += 1 }; return StatusItemSnapshot()
         })
         discovery.setPanelVisible(true)
-        check(discovery.applicationListMessage?.contains("Permissions → Accessibility") == true, "An empty list explains missing access even while absorption is off")
+        check(discovery.applicationListMessage?.contains("Permissions → " + PermissionEntry.accessibility.title) == true, "An empty list explains missing access even while absorption is off")
         trusted = true; discoveryPermissions.refresh()
         let deadline = Date().addingTimeInterval(2)
         while scanCount.snapshot == 0 && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
         check(scanCount.snapshot > 0 && !discovery.enabled && !discovery.isHolding, "Granting access starts discovery without enabling absorption")
         trusted = false; discoveryPermissions.refresh()
-        check(discovery.items.isEmpty && discovery.applicationListMessage?.contains("Permissions → Accessibility") == true, "Revocation clears stale discoveries and restores guidance")
+        check(discovery.items.isEmpty && discovery.applicationListMessage?.contains("Permissions → " + PermissionEntry.accessibility.title) == true, "Revocation clears stale discoveries and restores guidance")
         discovery.shutdown()
         // Controlled native-operation boundaries: no status item is invoked and
         // no mouse event is posted to another process by these checks.

@@ -136,7 +136,7 @@ final class IconAbsorberController {
         if !enabled { return "Enable Icon Absorber to open selected applications from the preview." }
         if preferences.bool(.suspended) { return "Resume All to open applications from the preview." }
         if !sessionActive { return "Preview controls are paused while this session is inactive." }
-        if !permissions.accessibility { return "Preview controls need Accessibility access. Review Permissions → Accessibility." }
+        if !permissions.accessibility { return "Preview controls need Accessibility access. Review Permissions → \(PermissionEntry.accessibility.title)." }
         if capturing { return "Wait for icon pictures to finish capturing before opening controls." }
         return nil
     }
@@ -145,7 +145,7 @@ final class IconAbsorberController {
     func isAbsorbed(_ bundle: String) -> Bool { service.held && selectedBundles.contains(bundle) && !temporaryAllowed.contains(bundle) }
     var active: Bool { enabled && !preferences.bool(.suspended) && sessionActive && permissions.accessibility && failure == nil && !stopped }
     var applicationListMessage: String? {
-        if !permissions.accessibility { return "Allow Jimmy Tweaks using Permissions → Accessibility to discover running menu bar applications." }
+        if !permissions.accessibility { return "Allow Jimmy Tweaks using Permissions → \(PermissionEntry.accessibility.title) to discover running menu bar applications." }
         if scanInFlight || !scanned { return "Looking for running applications with menu bar items…" }
         if items.isEmpty { return "No accessible menu bar applications found. Start an application such as MonitorControl, then choose Refresh." }
         return nil
@@ -430,7 +430,7 @@ final class IconAbsorberController {
     private func stopClockMonitor() { if let clockMonitor { NSEvent.removeMonitor(clockMonitor) }; clockMonitor = nil }
     func refreshPictures() {
         guard !capturing, interaction == nil, permissions.accessibility else { return }
-        guard CGPreflightScreenCaptureAccess() else { setState(state, "Review Permissions → Screen Recording to capture the actual status-item pictures. Application icons are used until then."); return }
+        guard CGPreflightScreenCaptureAccess() else { setState(state, "Review Permissions → \(PermissionEntry.screenRecording.title) to capture the actual status-item pictures. Application icons are used until then."); return }
         capturing = true; applyRevision &+= 1; service.stop(); lastHidden = nil; changed()
         let revision = interactionRevision
         worker.async { [weak self] in

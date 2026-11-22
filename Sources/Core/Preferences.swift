@@ -69,6 +69,7 @@ enum StaticEffect: String, CaseIterable {
 }
 
 enum PreferenceKey: String, CaseIterable {
+    case keepDisplayAwake = "awakeSleep.keepDisplayAwake"
     case staticEffect = "visualEffects.static.effect"
     case stormSnowfall = "visualEffects.static.snowStorm.snowfall"
     case stormFlakeSize = "visualEffects.static.snowStorm.flakeSize"
@@ -127,7 +128,7 @@ enum PreferenceKey: String, CaseIterable {
         case .rainAmount, .rainSpeed, .rainSize, .rainSplashFrequency, .fireflyAmount, .fireflySpeed, .fireflySize, .stormSnowfall, .stormFlakeSize, .stormGusts, .stormFireplaceWidth, .fireEmberDensity, .fireStormSpeed, .fireFlameHeight: return 50
         case .stormFireplaceHeight: return 158
         case .stormFireplaceOffset: return 0
-        case .shortcutsEnabled, .suspended, .outline, .normalWindowEffects, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress, .menuBarAudio, .stormBehindWindows, .stormFireplace, .stormDecorations, .stormLights, .fireAsh: return false
+        case .keepDisplayAwake, .shortcutsEnabled, .suspended, .outline, .normalWindowEffects, .loginRequested, .iconAbsorberEnabled, .iconAbsorberHiddenPress, .menuBarAudio, .stormBehindWindows, .stormFireplace, .stormDecorations, .stormLights, .fireAsh: return false
         case .fireSmoke, .fireHeatGlow: return true
         case .iconAbsorberPositionPanels: return true
         case .enabled, .resizeEnabled, .moveEnabled, .cursor, .hints, .animatedEffects, .showMenuBarIcon: return true

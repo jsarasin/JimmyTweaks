@@ -8,13 +8,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var item: NSStatusItem?
     private var observation: NSObjectProtocol?
     private let audio: OutputAudioController
+    private let powerMenu: AwakeSleepMenu?
     private let audioQueue = DispatchQueue(label: "app.jimmytweaks.status-volume", qos: .userInitiated)
     private let audioAllowed = Locked(false)
     private var stopped = false
     private let suspendItem = NSMenuItem(title: "Suspend All", action: nil, keyEquivalent: "")
-    init(preferences: PreferenceStore, openSettings: @escaping () -> Void, restoreIcons: @escaping () -> Void, audio: OutputAudioController = OutputAudioController()) {
+    init(preferences: PreferenceStore, openSettings: @escaping () -> Void, restoreIcons: @escaping () -> Void, audio: OutputAudioController = OutputAudioController(), awakeSleep: AwakeSleepController? = nil) {
         self.preferences = preferences; self.openSettings = openSettings; self.restoreIcons = restoreIcons
         self.audio = audio
+        self.powerMenu = awakeSleep.map(AwakeSleepMenu.init(controller:))
         super.init()
         observation = NotificationCenter.default.addObserver(forName: .preferencesChanged, object: preferences, queue: .main) { [weak self] _ in self?.update() }
         update()
@@ -45,7 +47,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             button.addSubview(overlay)
             button.toolTip = enabled ? "Jimmy Tweaks — scroll for volume; middle-click to mute" : "Jimmy Tweaks"
         }
-        let menu = NSMenu(); menu.delegate = self
+        let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
+        powerMenu?.append(to: menu)
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
         menu.addItem(settings); menu.addItem(.separator())
         suspendItem.target = self; suspendItem.action = #selector(toggleSuspension); menu.addItem(suspendItem)
@@ -53,7 +56,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator()); menu.addItem(withTitle: "Quit Jimmy Tweaks", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         status.menu = menu; item = status
     }
-    func menuNeedsUpdate(_ menu: NSMenu) { suspendItem.state = preferences.bool(.suspended) ? .on : .off }
+    func menuNeedsUpdate(_ menu: NSMenu) { suspendItem.state = preferences.bool(.suspended) ? .on : .off; powerMenu?.refresh() }
     private func audioAction(_ operation: @escaping (OutputAudioController) throws -> AudioFeedback) {
         audioQueue.async { [weak self] in
             guard let self, self.audioAllowed.snapshot else { return }

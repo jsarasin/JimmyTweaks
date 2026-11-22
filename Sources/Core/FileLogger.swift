@@ -45,6 +45,7 @@ final class FileLogger: @unchecked Sendable {
     private var retryAfter = Date.distantPast
     private var rateLimits: [String: (Date, Int)] = [:]
     private var timer: DispatchSourceTimer?
+    private var stopped = false
     private let formatter = ISO8601DateFormatter()
     private let dayFormatter: DateFormatter = {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(secondsFromGMT: 0); f.dateFormat = "yyyy-MM-dd"; return f
@@ -69,6 +70,7 @@ final class FileLogger: @unchecked Sendable {
     func rateLimited(_ key: String, component: String, event: String, message: String) {
         queue.async { [weak self] in
             guard let self = self else { return }
+            guard !self.stopped else { return }
             let now = self.clock()
             if let record = self.rateLimits[key], now.timeIntervalSince(record.0) < 60 {
                 self.rateLimits[key] = (record.0, record.1 + 1); return
@@ -83,6 +85,7 @@ final class FileLogger: @unchecked Sendable {
     func flush(completion: @escaping (Result<URL, Error>) -> Void) {
         queue.async { [weak self] in
             guard let self = self else { return }
+            guard !self.stopped else { DispatchQueue.main.async { completion(.failure(CocoaError(.fileWriteUnknown))) }; return }
             do {
                 try self.openIfNeeded()
                 try self.drainBuffered()
@@ -95,17 +98,20 @@ final class FileLogger: @unchecked Sendable {
     }
     func shutdown(completion: @escaping () -> Void) {
         queue.async { [self] in
+            guard !stopped else { DispatchQueue.main.async(execute: completion); return }
             do {
                 try openIfNeeded()
                 try drainBuffered()
                 try handle?.synchronize()
             } catch { failed(error) }
             try? handle?.close(); handle = nil; timer?.cancel()
+            stopped = true
             DispatchQueue.main.async(execute: completion)
         }
     }
     private func safe(_ text: String) -> String { text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\t", with: " ") }
     private func append(_ component: String, _ event: String, _ message: String, severity: String) {
+        guard !stopped else { return }
         let line = "\(formatter.string(from: clock()))\t\(safe(severity))\t\(safe(component))\t\(safe(event))\t\(safe(message))\n"
         guard clock() >= retryAfter else { retain(line); return }
         do {
@@ -155,6 +161,7 @@ final class FileLogger: @unchecked Sendable {
         }
     }
     private func maintain() {
+        guard !stopped else { return }
         do { try openIfNeeded(); try LogRetention.clean(directory: directory, active: file, now: clock()) }
         catch { failed(error) }
     }

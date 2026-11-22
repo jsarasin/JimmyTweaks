@@ -39,7 +39,7 @@ enum ModuleIcons {
     static func image(for page: SettingsPage, appearance a: ModuleIconAppearance) -> NSImage {
         let image = NSImage(size: NSSize(width: 64, height: 64), flipped: false) { _ in
             let hues: [SettingsPage: CGFloat] = [.general: 0.59, .permissions: 0.33, .window: 0.54, .visualEffects: 0.77,
-                .iconAbsorber: 0.93, .shortcuts: 0.12, .scripts: 0.07, .logging: 0.46, .about: 0.65]
+                .iconAbsorber: 0.93, .shortcuts: 0.12, .scripts: 0.07, .awakeSleep: 0.66, .logging: 0.46, .about: 0.65]
             let color = NSColor(calibratedHue: hues[page] ?? 0.6, saturation: 0.75, brightness: 0.95, alpha: 1)
             let tile = NSBezierPath(roundedRect: NSRect(x: 4, y: 4, width: 56, height: 56), xRadius: 16, yRadius: 16)
             let foreground: NSColor
@@ -87,6 +87,10 @@ enum ModuleIcons {
                 let p = NSBezierPath(); p.move(to: NSPoint(x: x, y: y)); p.curve(to: NSPoint(x: x + 12, y: y + 1), controlPoint1: NSPoint(x: x + 3, y: y - 7), controlPoint2: NSPoint(x: x + 10, y: y - 5)); p.lineWidth = 2.2; p.lineCapStyle = .round; p.stroke()
             }
             switch page {
+            case .awakeSleep:
+                oval(17, 17, 30, 30)
+                line([NSPoint(x: 32, y: 40), NSPoint(x: 32, y: 31), NSPoint(x: 40, y: 27)])
+                line([NSPoint(x: 45, y: 49), NSPoint(x: 54, y: 49), NSPoint(x: 45, y: 41), NSPoint(x: 54, y: 41)], width: 2)
             case .general:
                 oval(17, 17, 30, 30)
                 for i in 0..<8 { let angle = CGFloat(i) * .pi / 4; line([NSPoint(x: 32 + cos(angle) * 17, y: 32 + sin(angle) * 17), NSPoint(x: 32 + cos(angle) * 21, y: 32 + sin(angle) * 21)], width: 5) }

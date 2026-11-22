@@ -5,13 +5,7 @@ final class SystemAccessGuide: NSView {
     let permission: PermissionEntry
     private let portrait = Bundle.main.url(forResource: "PermissionGuidePortrait", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
     private let appIcon = BrandIcon.applicationImage(size: 64)
-    private var panelTitle: String {
-        switch permission {
-        case .accessibility: return "Device Control and Data Access"
-        case .inputMonitoring: return "Input Monitoring"
-        case .screenRecording: return "Screen & System Audio Recording"
-        }
-    }
+    private var panelTitle: String { permission.title }
     private var panelDescription: String {
         switch permission {
         case .accessibility:

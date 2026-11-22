@@ -20,6 +20,7 @@ xcrun swiftc -swift-version 5 -target arm64-apple-macosx27.0 -sdk "$(xcrun --sho
     -framework ServiceManagement -framework Security -framework ScreenCaptureKit "${FLAGS[@]}" "${SOURCES[@]}" \
     -o "$APP_BUNDLE/Contents/MacOS/JimmyTweaks"
 bash "$PROJECT_ROOT/Scripts/build-icon-absorber-agent.sh" "$APP_BUNDLE/Contents/Helpers"
+BUNDLE_IDENTIFIER="$BUNDLE_ID" bash "$PROJECT_ROOT/Scripts/build-awake-sleep-helper.sh" "$APP_BUNDLE/Contents"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
 xcrun swiftc -parse-as-library -module-cache-path "$BUILD_ROOT/ModuleCache" \

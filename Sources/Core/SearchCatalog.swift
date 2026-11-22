@@ -1,15 +1,16 @@
 import Foundation
 
 enum SettingsPage: String, CaseIterable {
-    case general, permissions, window, visualEffects, iconAbsorber, shortcuts, scripts, logging, about
+    case general, permissions, window, visualEffects, iconAbsorber, shortcuts, scripts, awakeSleep, logging, about
     var title: String {
         switch self {
+        case .awakeSleep: return "Awake & Sleep"
         case .permissions: return "Permissions"
         case .shortcuts: return "Custom Shortcuts"
         case .window: return "Window Move & Resize"
         case .visualEffects: return "Visual Effects"
         case .iconAbsorber: return "Icon Absorber"
-        case .scripts: return "Reoccurring Scripts"
+        case .scripts: return "Recurring Requests"
         case .general: return "General"
         case .logging: return "Logging"
         case .about: return "About"
@@ -17,6 +18,7 @@ enum SettingsPage: String, CaseIterable {
     }
     var symbol: String {
         switch self {
+        case .awakeSleep: return "moon.zzz"
         case .permissions: return "lock.shield"
         case .shortcuts: return "keyboard"
         case .window: return "arrow.up.left.and.arrow.down.right"
@@ -34,9 +36,9 @@ enum PermissionEntry: String, CaseIterable {
     case accessibility, inputMonitoring, screenRecording
     var title: String {
         switch self {
-        case .accessibility: return "Accessibility"
+        case .accessibility: return "Device Control and Data Access"
         case .inputMonitoring: return "Input Monitoring"
-        case .screenRecording: return "Screen Recording"
+        case .screenRecording: return "Screen & System Audio Recording"
         }
     }
     var controlID: String { "permissions.\(rawValue)" }
@@ -45,7 +47,7 @@ enum PermissionEntry: String, CaseIterable {
 struct SearchDestination {
     var page: SettingsPage
     var controlID: String
-    var sampleID: String? = nil
+    var requestID: UUID? = nil
 }
 struct ControlMetadata {
     let id: String

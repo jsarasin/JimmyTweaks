@@ -24,27 +24,68 @@ final class GeneralPageController: SettingsPageController {
 }
 
 final class PermissionsPageController: SettingsPageController {
+    private func addActions(for permission: PermissionEntry, to card: NSStackView) {
+        let permissions = context.permissions
+        let feedback = UI.caption("")
+        feedback.identifier = NSUserInterfaceItemIdentifier("\(permission.controlID).requestFeedback")
+        feedback.isHidden = true; feedback.isSelectable = true
+        let open = ActionButton("Open \(permission.title)") { permissions.openSettings(for: permission) }
+        let request = ActionButton("Request \(permission.title)") { [weak self, weak feedback] in
+            permissions.request(permission); self?.refreshValues()
+            if permission == .inputMonitoring {
+                let opened = permissions.openInputMonitoringSettings()
+                feedback?.stringValue = "Request sent to macOS. " +
+                    (opened ? "Review Input Monitoring in System Settings." : "Open System Settings → Privacy & Security → Input Monitoring manually.") +
+                    " If no prompt appears, enable Jimmy Tweaks there. If it is missing, use + to add this copy:\n\(Bundle.main.bundleURL.path)"
+                feedback?.isHidden = false
+                self?.context.logger.log("permissions", "input-monitoring.request", "Native request invoked; listeningAvailable=\(permissions.inputMonitoring); accessibility=\(permissions.accessibility); settingsOpened=\(opened)")
+            }
+        }
+        let check = ActionButton("Check for approval") { [weak self] in
+            permissions.refresh(); self?.refreshValues()
+        }
+        let row = UI.horizontal([open, request, check], spacing: 8)
+        row.distribution = .fillEqually
+        for (button, suffix, description) in [
+            (open, "open", "Open \(permission.title) in System Settings without requesting access."),
+            (request, "request", "Request Jimmy Tweaks access to \(permission.title). macOS controls approval."),
+            (check, "check", "Check approval for \(permission.title) without requesting access.")
+        ] {
+            button.bezelStyle = .regularSquare
+            button.font = .systemFont(ofSize: 12)
+            button.cell?.usesSingleLineMode = false; button.cell?.isScrollable = false
+            button.cell?.wraps = true; button.cell?.lineBreakMode = .byWordWrapping
+            button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            button.heightAnchor.constraint(equalToConstant: 76).isActive = true
+            metadata(button, id: "\(permission.controlID).\(suffix)", label: button.title,
+                     description: description, keywords: ["permission", "allow", "approval", "system settings"], section: permission.title)
+        }
+        if permission == .inputMonitoring { add(feedback, to: card) }
+        add(row, to: card)
+    }
     private func addGuide(for permission: PermissionEntry, to card: NSStackView) {
         let guide = SystemAccessGuide(permission: permission)
         guide.heightAnchor.constraint(equalToConstant: guide.intrinsicContentSize.height).isActive = true
         add(guide, to: card)
+        add(UI.caption("Example System Settings — the illustration does not show your current permission status."), to: card)
     }
     override func build() {
-        add(UI.caption("Jimmy Tweaks requests missing permissions when it launches. While this page is visible, missing access is checked automatically every two seconds."))
-        let reset = card("Reset for Testing")
-        add(UI.caption("Clear Jimmy Tweaks’ macOS privacy permissions, then quit for a clean next launch. Your shortcut definitions and app preferences are preserved."), to: reset)
-        let resetButton = action("Reset macOS Permissions and Quit…", id: "permissions.reset", description: "Reset only this build’s macOS privacy permissions and quit. Reopen Jimmy Tweaks to grant access again.", keywords: ["remove", "clear", "reset", "testing", "tcc", "privacy"], to: reset) { [weak self] in
-            self?.context.confirm?("Reset macOS Permissions and Quit?", "This clears privacy permission decisions for Jimmy Tweaks and then quits the app. Reopen it to grant access again. macOS may keep some entries listed; Login Items and other System Settings are not reset. Your shortcut definitions and app preferences are preserved.") { [weak self] in
-                self?.context.resetPermissionsAndQuit?()
+        add(UI.caption("Jimmy Tweaks does not request permissions at launch. Use Request to ask macOS for access, then Check for approval to refresh the status. While this page is visible, missing access is also checked automatically every two seconds."))
+        let reset = card("Reset permissions and uninstall workers")
+        add(UI.caption("Prepare for a fresh install: restore sleep settings and absorbed icons, remove workers and launch at login, reset privacy permissions, and delete saved settings, shortcuts, requests, responses, logs, and caches. Jimmy Tweaks then quits."), to: reset)
+        let resetButton = action("Reset Permissions and Uninstall Workers…", id: "permissions.reset", description: "Remove Jimmy Tweaks’ workers, privacy permissions, saved settings, shortcuts, requests, responses, logs, and caches, then quit for a fresh install.", keywords: ["remove", "clear", "reset", "testing", "tcc", "privacy", "uninstall", "workers", "fresh install"], to: reset) { [weak self] in
+            self?.context.confirm?("Reset Permissions and Uninstall Workers?", "This permanently deletes Jimmy Tweaks’ saved settings, custom shortcuts, requests, responses, logs, and caches. It restores the sleep setting, releases absorbed icons, removes the power worker and launch-at-login registration, resets this app’s macOS privacy permissions, and quits. The application itself stays installed. If cleanup fails, the app will report what remains.") { [weak self] in
+                self?.context.resetAndUninstallWorkers?()
             }
         }
         resetButton.hasDestructiveAction = true
         let access = card(PermissionEntry.accessibility.title)
-        metadata(access, id: PermissionEntry.accessibility.controlID, label: "Accessibility — Device Control and Data Access", description: "Required for Window Move & Resize, Icon Absorber, and Absorbing shortcuts.", keywords: ["permission", "device control", "data access", "window", "menu bar", "absorbing"], section: "Accessibility")
+        metadata(access, id: PermissionEntry.accessibility.controlID, label: PermissionEntry.accessibility.title, description: "Required for Window Move & Resize, Icon Absorber, and Absorbing shortcuts.", keywords: ["permission", "accessibility", "device control", "data access", "window", "menu bar", "absorbing"], section: PermissionEntry.accessibility.title)
         addGuide(for: .accessibility, to: access)
         add(UI.label("Enable Jimmy Tweaks in Device Control and Data Access to control windows, discover menu bar applications, and intercept Absorbing shortcuts."), to: access)
-        let status = UI.caption(""); add(status, to: access)
-        action("Open System Settings", id: "permissions.accessibility.open", description: "Open macOS privacy settings for Accessibility / Device Control and Data Access.", keywords: ["allow", "grant", "system settings"], section: "Accessibility", to: access) { [weak self] in self?.context.permissions.openSettings() }
+        let status = UI.caption(""); status.identifier = NSUserInterfaceItemIdentifier("permissions.accessibility.status"); add(status, to: access)
+        addActions(for: .accessibility, to: access)
         refreshers.append { [weak self, weak status] in
             guard let self, let status else { return }
             UI.updateSystemAccessStatus(status, permissions: self.context.permissions)
@@ -53,27 +94,31 @@ final class PermissionsPageController: SettingsPageController {
         let input = card(PermissionEntry.inputMonitoring.title)
         metadata(input, id: PermissionEntry.inputMonitoring.controlID, label: "Input Monitoring", description: "Observe Transparent shortcuts and record global keyboard and mouse combinations.", keywords: ["permission", "keyboard", "mouse", "listen", "transparent", "recorder"], section: "Input Monitoring")
         addGuide(for: .inputMonitoring, to: input)
-        add(UI.caption("Requested automatically at launch for Transparent shortcuts and the global shortcut recorder. Accessibility may also permit observation. If Jimmy Tweaks is missing from Privacy & Security > Input Monitoring, use the + button to add it."), to: input)
-        let inputStatus = UI.caption(""); add(inputStatus, to: input)
-        action("Open Input Monitoring Settings…", id: "permissions.inputMonitoring.open", description: "Open macOS Input Monitoring privacy settings.", keywords: ["system settings", "allow", "listen"], section: "Input Monitoring", to: input) { [weak self] in self?.context.permissions.openInputMonitoringSettings() }
+        add(UI.caption("Used for Transparent shortcuts and the global shortcut recorder without broader device control. Device Control and Data Access already covers input observation. Request always asks macOS for Input Monitoring access and opens its settings; macOS may suppress a new prompt. If Jimmy Tweaks is missing, use + in System Settings to add this copy."), to: input)
+        let inputStatus = UI.caption(""); inputStatus.identifier = NSUserInterfaceItemIdentifier("permissions.inputMonitoring.status"); add(inputStatus, to: input)
+        addActions(for: .inputMonitoring, to: input)
         refreshers.append { [weak self, weak inputStatus] in
             guard let self else { return }
-            let granted = self.context.permissions.inputMonitoring
-            inputStatus?.stringValue = granted ? "Permission granted" : "Enable Jimmy Tweaks in Input Monitoring in System Settings."
-            inputStatus?.textColor = granted ? .systemGreen : .systemOrange
+            let permissions = self.context.permissions
+            if permissions.accessibility {
+                inputStatus?.stringValue = "Covered by Device Control and Data Access. Separate Input Monitoring approval is optional and is not confirmed by this status."
+            } else {
+                inputStatus?.stringValue = permissions.inputMonitoring ? "Input observation available." : "Enable Jimmy Tweaks in Input Monitoring in System Settings."
+            }
+            inputStatus?.textColor = permissions.accessibility || permissions.inputMonitoring ? .systemGreen : .systemOrange
         }
 
         let screen = card(PermissionEntry.screenRecording.title)
-        metadata(screen, id: PermissionEntry.screenRecording.controlID, label: "Screen Recording", description: "Optional access for capturing original menu bar icon pictures. Review capture access for native screenshot actions here.", keywords: ["permission", "screen capture", "clipboard", "screenshot", "icon pictures"], section: "Screen Recording")
+        metadata(screen, id: PermissionEntry.screenRecording.controlID, label: PermissionEntry.screenRecording.title, description: "Optional access for capturing original menu bar icon pictures. Review capture access for native screenshot actions here.", keywords: ["permission", "screen recording", "screen capture", "clipboard", "screenshot", "icon pictures"], section: PermissionEntry.screenRecording.title)
         addGuide(for: .screenRecording, to: screen)
-        add(UI.caption("Requested automatically at launch for Icon Absorber’s original icon pictures. This access is optional. If Jimmy Tweaks is missing from Privacy & Security > Screen & System Audio Recording, use the + button to add it. Native screenshot actions use the macOS screenshot utility."), to: screen)
-        let screenStatus = UI.caption(""); add(screenStatus, to: screen)
-        action("Open Screen Recording Settings…", id: "permissions.screenRecording.open", description: "Open macOS Screen Recording privacy settings. No screen is captured by opening this entry.", keywords: ["system settings", "capture", "allow"], section: "Screen Recording", to: screen) { [weak self] in self?.context.permissions.openScreenRecordingSettings() }
+        add(UI.caption("Optional access for Icon Absorber’s original icon pictures. Use Request to register access with macOS; requesting does not capture an image. If access was denied before, enable Jimmy Tweaks in Screen & System Audio Recording in System Settings. If it is still missing, use the + button there to add it. Native screenshot actions use the macOS screenshot utility."), to: screen)
+        let screenStatus = UI.caption(""); screenStatus.identifier = NSUserInterfaceItemIdentifier("permissions.screenRecording.status"); add(screenStatus, to: screen)
+        addActions(for: .screenRecording, to: screen)
         refreshers.append { [weak self, weak screenStatus] in
             guard let self else { return }
             let granted = self.context.permissions.screenRecording
             screenStatus?.stringValue = granted ? "Permission granted" : "Enable Jimmy Tweaks in Screen & System Audio Recording in System Settings. Application icons are used until access is granted."
-            screenStatus?.textColor = granted ? .systemGreen : .secondaryLabelColor
+            screenStatus?.textColor = granted ? .systemGreen : .systemOrange
         }
     }
 }
@@ -138,6 +183,12 @@ final class LoggingPageController: SettingsPageController {
 
 final class AboutPageController: SettingsPageController {
     override func build() {
+        let icon = NSImageView(image: BrandIcon.applicationImage(size: 256))
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.imageAlignment = .alignCenter
+        icon.setAccessibilityLabel("Jimmy Tweaks app icon")
+        icon.heightAnchor.constraint(equalToConstant: 256).isActive = true
+        add(icon)
         let card = card("Jimmy Tweaks")
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
@@ -146,6 +197,6 @@ final class AboutPageController: SettingsPageController {
         let platform = UI.caption("Native Swift and AppKit · macOS 27 or later · Apple silicon"); add(platform, to: card)
         metadata(platform, id: "about.platform", label: "Supported Platform", description: platform.stringValue, keywords: ["macOS", "27", "system", "requirements"])
         add(UI.label("Small window gestures. Native settings. Quiet background operation."), to: card)
-        add(UI.caption("Window resizing and moving run locally with your permission. Reoccurring Scripts is a nonfunctional interface preview. No account, analytics, network connection, or telemetry is used."), to: card)
+        add(UI.caption("Window resizing and moving run locally with your permission. Recurring Requests sends only the HTTP/API calls you configure, manually or on a schedule. No account, analytics, or telemetry is used."), to: card)
     }
 }

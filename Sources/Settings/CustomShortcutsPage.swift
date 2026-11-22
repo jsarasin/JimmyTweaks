@@ -22,9 +22,9 @@ final class CustomShortcutsPageController: SettingsPageController, NSTableViewDa
         let module = card("")
         toggle("Enable Custom Shortcuts", key: .shortcutsEnabled, id: "shortcuts.enabled", description: "Run global keyboard and mouse shortcuts while Jimmy Tweaks is in the background.", keywords: ["hotkey", "keyboard", "mouse", "transparent", "absorbing"], section: "Module", to: module)
         add(status, to: module)
-        permissionLink(.accessibility, title: "Accessibility for Absorbing shortcuts…", to: module)
+        permissionLink(.accessibility, title: "\(PermissionEntry.accessibility.title) for Absorbing shortcuts…", to: module)
         permissionLink(.inputMonitoring, title: "Input Monitoring for Transparent shortcuts and recording…", to: module)
-        let captureLink = permissionLink(.screenRecording, title: "Screen Recording for capture actions…", to: module)
+        let captureLink = permissionLink(.screenRecording, title: "\(PermissionEntry.screenRecording.title) for capture actions…", to: module)
         let retry = ActionButton("Retry Shortcuts") { [weak self] in self?.context.runtime.shortcuts.retry() }
         add(retry, to: module)
         refreshers.append { [weak self, weak retry, weak captureLink] in

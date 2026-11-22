@@ -332,14 +332,29 @@ import CoreGraphics
         expect("Stable ID registration does not duplicate", c.entries.count == 2)
     }
     static func scripts() {
-        let p = ScriptsPreview(); expect("Three samples and static histories", p.scripts.count == 3 && p.history.count == 3 && !p.enabled)
-        let originalHistory = p.history.count, id = p.add(); _ = p.duplicate(id)
-        expect("Preview changes never append runs", p.history.count == originalHistory)
-        expect("HTTPS syntax accepts sample", ScriptsPreview.validURL("https://example.org/scripts/test.sh"))
-        for invalid in ["file:///tmp/test.sh", "http://example.com/test.sh", "https://", "https://user:password@example.org/test.sh", "https://example.org/a b"] {
-            expect("Reject invalid preview URL", !ScriptsPreview.validURL(invalid))
+        var request = RequestDefinition()
+        expect("New requests are manual and disabled", request.schedule == .manual && !request.enabled)
+        for url in ["https://example.org/api", "http://127.0.0.1:8080/api", "http://localhost/api", "http://192.168.1.2/api", "http://[::1]:8080/api"] {
+            expect("Accept HTTP API URL", RequestDefinition.validURL(url))
         }
-        p.reset(); expect("Preview reset restores seed", p.scripts.count == 3 && p.history.count == 3)
+        for url in ["file:///tmp/test.sh", "ftp://example.org/api", "https://", "https://user:password@example.org/api", "https://example.org/a b", "https://example.org/#fragment", "http://localhost:0"] {
+            expect("Reject invalid API URL", !RequestDefinition.validURL(url))
+        }
+        request.url = "https://example.org/api"
+        expect("Valid request", request.validationError == nil)
+        request.headers = [RequestHeader(name: "X-Test", value: "one"), RequestHeader(name: "x-test", value: "two")]
+        expect("Reject duplicate header", request.validationError != nil)
+        request.headers = [RequestHeader(name: "Authorization", value: "Bearer key\r\nInjected: bad")]
+        expect("Reject header injection", request.validationError != nil)
+        request.headers = []; request.method = "POST"; request.bodyKind = .json; request.body = "invalid"
+        expect("Reject malformed JSON", request.validationError != nil)
+        request.body = "{\"ok\": true}"
+        expect("Accept JSON body", request.validationError == nil)
+        let now = Date(timeIntervalSince1970: 1000)
+        expect("Manual never schedules", RequestSchedule.manual.next(after: now) == nil)
+        expect("Interval advances", RequestSchedule.interval(minutes: 5).next(after: now) == now.addingTimeInterval(300))
+        expect("Reject zero interval", RequestSchedule.interval(minutes: 0).next(after: now) == nil)
+        expect("Reject invalid daily time", RequestSchedule.daily(hour: 24, minute: 0).next(after: now) == nil)
     }
     static func retry() {
         var b = RetryBudget()

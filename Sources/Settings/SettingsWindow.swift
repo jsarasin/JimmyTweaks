@@ -20,7 +20,12 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
     private var debounce: DispatchWorkItem?
     private var iconAppearance: ModuleIconAppearance?
     private var appearanceTimer: Timer?
-    private let rows: [SettingsPage] = SettingsPage.allCases
+    // A nil row draws the divider between core settings and activities.
+    private let rows: [SettingsPage?] = [
+        .general, .permissions, .logging, .about,
+        nil,
+        .window, .visualEffects, .iconAbsorber, .shortcuts, .scripts, .awakeSleep
+    ]
     override func loadView() {
         view = NSView()
         let material = NSVisualEffectView(); material.material = .sidebar; material.blendingMode = .behindWindow; UI.pin(material, in: view)
@@ -88,13 +93,27 @@ private final class SidebarController: NSViewController, NSTableViewDelegate, NS
         return false
     }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { rows[row] == .general ? 36 : 26 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        guard let page = rows[row] else { return 16 }
+        return page == .general ? 36 : 26
+    }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows[row] != nil }
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard rows.indices.contains(table.selectedRow) else { return }
-        onNavigate?(rows[table.selectedRow])
+        guard rows.indices.contains(table.selectedRow), let page = rows[table.selectedRow] else { return }
+        onNavigate?(page)
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let page = rows[row]
+        guard let page = rows[row] else {
+            let cell = NSView(), separator = UI.separator()
+            separator.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(separator)
+            NSLayoutConstraint.activate([
+                separator.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
+                separator.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
+                separator.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+            ])
+            cell.identifier = NSUserInterfaceItemIdentifier("navigation.divider")
+            return cell
+        }
         let style = iconAppearance ?? ModuleIconAppearance.resolve(theme: nil, systemDark: false)
         let icon = NSImageView(image: ModuleIcons.image(for: page, appearance: style))
         let size: CGFloat = page == .general ? 28 : 22
@@ -207,6 +226,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             .visualEffects: VisualEffectsPageController(.visualEffects, context: context),
             .iconAbsorber: IconAbsorberPageController(.iconAbsorber, context: context), .scripts: ScriptsPageController(.scripts, context: context),
             .shortcuts: CustomShortcutsPageController(.shortcuts, context: context),
+            .awakeSleep: AwakeSleepPageController(.awakeSleep, context: context),
             .logging: LoggingPageController(.logging, context: context), .about: AboutPageController(.about, context: context)]
         for page in SettingsPage.allCases { _ = pages[page]?.view }
     }
@@ -223,13 +243,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         context.confirm = { [weak self] title, detail, completion in self?.confirm(title, detail: detail, completion: completion) }
         context.showMessage = { [weak self] title, detail in self?.message(title, detail: detail) }
         context.refresh = { [weak self] in self?.refreshAll() }
-        for name in [Notification.Name.preferencesChanged, .runtimeChanged, .permissionsChanged, .loggingChanged, .iconAbsorberChanged, .shortcutsChanged] {
+        for name in [Notification.Name.preferencesChanged, .runtimeChanged, .permissionsChanged, .loggingChanged, .iconAbsorberChanged, .shortcutsChanged, .awakeSleepChanged, .requestsChanged] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refreshAll() })
         }
     }
     private func registerMetadata() {
         for page in SettingsPage.allCases {
-            context.catalog.register(ControlMetadata(id: "navigation.\(page.rawValue)", label: page.title, description: page == .scripts ? "Sample script controls and fictional history. Nothing executes." : "Open the \(page.title) Settings page.", keywords: [page.rawValue], section: "", destination: SearchDestination(page: page, controlID: "")))
+            context.catalog.register(ControlMetadata(id: "navigation.\(page.rawValue)", label: page.title, description: page == .scripts ? "Configure HTTP/API requests, optional schedules, Run Once, and inspect responses." : "Open the \(page.title) Settings page.", keywords: page == .scripts ? ["scripts", "recurring", "reoccurring", "HTTP", "API", "webhook"] : [page.rawValue], section: "", destination: SearchDestination(page: page, controlID: "")))
         }
         for (id, label, description) in [
             ("global.search", "Search Settings", "Find controls by feature, description, gesture, and keyword."),
@@ -268,7 +288,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     private func navigate(_ destination: SearchDestination) {
         sidebar.clearSearch(); show(destination.page)
-        if let sample = destination.sampleID { (pages[.scripts] as? ScriptsPageController)?.selectSample(sample) }
+        if let request = destination.requestID { (pages[.scripts] as? ScriptsPageController)?.selectRequest(request) }
         let globals: [String: NSView] = ["global.search": sidebar.search, "global.search.clear": sidebar.search, "global.quit": sidebar.quit]
         if let control = globals[destination.controlID] { window?.makeFirstResponder(control) }
         else { DispatchQueue.main.async { [weak self] in self?.pages[destination.page]?.focus(destination.controlID) } }

@@ -94,19 +94,25 @@ enum DesktopInteractionTests {
         let transparent = NSPanel(contentRect: own.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         transparent.isOpaque = false; transparent.backgroundColor = .clear; transparent.ignoresMouseEvents = true
         transparent.orderFrontRegardless(); settle()
-        let routedAccess = AccessibilityWindows(hitTest: { _, _ in AXUIElementCreateApplication(getpid()) })
+        // Capture the same native snapshot used for admission. WindowServer can
+        // finish ordering the fixture between resolution and a later hit query;
+        // checking a second snapshot incorrectly rejected the safe nil result.
+        var nativeSurface: NSWindow?, nativeSurfaceChecked = false
+        let routedAccess = AccessibilityWindows(hitTest: { _, _ in AXUIElementCreateApplication(getpid()) }, localHitTest: { point in
+            nativeSurface = AccessibilityWindows.localWindow(at: point); nativeSurfaceChecked = true
+            return nativeSurface
+        })
         let routedFrame = AccessibilityWindows.screenFrame(own)
         var routed: WindowTarget?, routeFinished = false
         routedAccess.resolve(point: CGPoint(x: routedFrame.midX, y: routedFrame.midY), button: .left, preferences: GesturePreferences(),
             deadline: ProcessInfo.processInfo.systemUptime + 0.18, stillValid: { true }) { routed = $0; routeFinished = true }
         let routeDeadline = Date().addingTimeInterval(1)
         while !routeFinished && Date() < routeDeadline { settle() }
-        let cocoaPoint = CGPoint(x: own.frame.midX, y: own.frame.midY)
-        let hitNumber = NSWindow.windowNumber(at: cocoaPoint, belowWindowWithWindowNumber: 0)
-        if hitNumber == own.windowNumber {
-            check(routeFinished && routed?.localWindow === own, "native hit routing skips our mouse-transparent effect surfaces")
+        check(routeFinished && nativeSurfaceChecked, "native hit routing checks its foreground surface within the admission deadline")
+        if nativeSurface === own {
+            check(routed?.localWindow === own, "native hit routing skips our mouse-transparent effect surfaces")
         } else {
-            check(routeFinished && routed == nil, "native hit routing does not reach through a foreign foreground surface")
+            check(routed == nil, "native hit routing does not reach through a foreign foreground surface")
             print("Positive native pointer routing is obscured by a foreign foreground surface; native frame transactions are tested independently.")
         }
         transparent.orderOut(nil)

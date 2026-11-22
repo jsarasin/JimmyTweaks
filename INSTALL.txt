@@ -2,7 +2,9 @@ JIMMY TWEAKS — macOS 27 or later, Apple silicon
 
 1. Drag Jimmy Tweaks to Applications.
 2. Open Jimmy Tweaks from Applications.
-3. Follow or skip the permission assistant. You can relaunch it from Status.
+3. Review any missing-permission information shown at launch.
+   Open Permissions, use Request for each needed permission, approve Jimmy
+   Tweaks in System Settings, then select Check for approval.
 
 Hold Command and right-drag near any window corner to resize it.
 Hold Command and left-drag inside a window to move it.
@@ -13,8 +15,10 @@ Closing Settings leaves enabled features running in the background.
 Open the app again from Applications to change settings.
 Suspend All persists across launches. Use Quit Jimmy Tweaks to stop the process.
 
-Reoccurring Scripts is a NONFUNCTIONAL UI STUB. Nothing is fetched,
-scheduled, or executed. Its history is fictional sample data.
+Recurring Requests sends HTTP/API requests with configurable methods, headers,
+and JSON/text bodies. Use Manual Only and Run Once, or enable an interval/daily
+schedule. Quit cancels requests and timers; no request worker remains running.
+Request definitions and bounded response history are stored locally.
 
 Window support depends on macOS and each application's Accessibility behavior.
 Threshold mode can briefly delay ordinary Command-clicks.
@@ -22,3 +26,12 @@ Threshold mode can briefly delay ordinary Command-clicks.
 A local ad-hoc signed build is for local development and has not been notarized.
 Only a distribution explicitly built with Developer ID credentials and notarized
 through the included workflow should be represented as a notarized release.
+
+Awake & Sleep is available from Settings and the J menu bar icon. Closed-lid
+sessions require the optional power helper, a signed/notarized build, and macOS
+administrator approval. Use Stop & Sleep Now to release an active override.
+
+For a fresh install, open Permissions and choose Reset Permissions and Uninstall
+Workers. This removes saved settings, shortcuts, request data, logs, and app-owned registrations,
+resets privacy permissions, and quits. It leaves the app itself installed. Normal
+upgrades with the same bundle identity replace workers while preserving your data.

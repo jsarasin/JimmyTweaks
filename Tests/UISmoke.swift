@@ -2,6 +2,7 @@ import AppKit
 
 @main struct UISmoke {
     static func main() throws {
+        setbuf(stdout, nil)
         if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--shutdown-child" {
             signal(SIGTERM, SIG_IGN)
             try Data().write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
@@ -16,7 +17,9 @@ import AppKit
         let context = SettingsContext(preferences: prefs, permissions: permissions, runtime: runtime, logger: logger, login: LoginService(preferences: prefs))
         EngineTests.run(logger: logger)
         PermissionTests.run()
+        AwakeSleepTests.run(logger: logger)
         ShortcutTests.run(logger: logger)
+        try RequestTests.run(root: root.appendingPathComponent("requests"))
         SettingsRegressionTests.run(logger: logger)
         IconAbsorberPreviewTests.run(logger: logger)
         try SnowStormTests.run(root: root)
@@ -80,15 +83,15 @@ import AppKit
         assert(!parentBoundPicker.isVisible && parentBoundPicker.parent == nil, "Closing Settings closes its action picker")
         controller.showWindow(nil); settle()
         prefs.shortcuts = []
-        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.runPreview", "permissions.accessibility.open", "general.menuBarIcon", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
+        for id in ["global.suspendAll", "window.move.threshold", "window.resize.activation", "scripts.run", "permissions.accessibility.open", "general.menuBarIcon", "logging.open", "iconAbsorber.enabled", "iconAbsorber.restore", "iconAbsorber.preview"] {
             assert(context.catalog.entries.contains { $0.id == id }, "Missing required searchable control: \(id)")
         }
         print("UI content frame: \(window.contentView!.frame); metadata entries: \(context.catalog.entries.count)")
         assert(window.contentView!.frame.width >= 780, "Settings must preserve its minimum usable width")
         assert(context.catalog.search("move threshold").contains { $0.id == "window.move.threshold" })
-        assert(context.catalog.search("script preview").contains { $0.destination.page == .scripts })
+        assert(context.catalog.search("HTTP API").contains { $0.destination.page == .scripts })
         assert(context.catalog.search("menu bar").contains { $0.destination.page == .iconAbsorber })
-        assert(SettingsPage.allCases.map(\.title) == ["General", "Permissions", "Window Move & Resize", "Visual Effects", "Icon Absorber", "Custom Shortcuts", "Reoccurring Scripts", "Logging", "About"])
+        assert(SettingsPage.allCases.map(\.title) == ["General", "Permissions", "Window Move & Resize", "Visual Effects", "Icon Absorber", "Custom Shortcuts", "Recurring Requests", "Awake & Sleep", "Logging", "About"])
         assert(window.titlebarAccessoryViewControllers.isEmpty, "The redundant top status strip is removed")
         context.navigate?(SearchDestination(page: .general, controlID: "")); settle()
         let generalViews = views(window.contentView!)
@@ -123,18 +126,18 @@ import AppKit
         assert(!context.catalog.entries.contains { ["permissions.inputMonitoring.allow", "permissions.refresh"].contains($0.id) })
         assert(permissionsPage.controls["permissions.inputMonitoring.open"] != nil && permissionsPage.controls["permissions.screenRecording.open"] != nil)
         let resetButton = permissionsPage.controls["permissions.reset"] as! ActionButton
-        let savedConfirm = context.confirm, savedReset = context.resetPermissionsAndQuit
+        let savedConfirm = context.confirm, savedReset = context.resetAndUninstallWorkers
         var permissionResetRequests = 0, permissionResetConfirmation: (() -> Void)?
         context.confirm = { title, _, completion in
-            assert(title == "Reset macOS Permissions and Quit?")
+            assert(title == "Reset Permissions and Uninstall Workers?")
             permissionResetConfirmation = completion
         }
-        context.resetPermissionsAndQuit = { permissionResetRequests += 1 }
+        context.resetAndUninstallWorkers = { permissionResetRequests += 1 }
         resetButton.performClick(nil)
         assert(permissionResetConfirmation != nil && permissionResetRequests == 0, "Reset requires confirmation before requesting termination")
         permissionResetConfirmation?()
         assert(permissionResetRequests == 1, "Confirmation routes to the app's reset-and-quit lifecycle")
-        context.confirm = savedConfirm; context.resetPermissionsAndQuit = savedReset
+        context.confirm = savedConfirm; context.resetAndUninstallWorkers = savedReset
 
         prefs.shortcuts = []
         let mark = MenuBarController.makeIcon()
@@ -209,21 +212,18 @@ import AppKit
         assert(thresholdField.stringValue == "5" && numeric.stepper.integerValue == 5, "Reset clears invalid text even at the default value")
         assert(views(numeric).compactMap { $0 as? NSTextField }.filter { $0.textColor == .systemRed }.allSatisfy(\.isHidden))
 
-        // Removed dynamic samples and seed rows must disappear from search;
-        // Reset All must rebuild the catalog without reopening Settings.
+        // Dynamic request metadata never indexes user payloads and retires removed rows.
         let scripts = ScriptsPageController(.scripts, context: context)
         _ = scripts.view
-        context.preview.enabled = true
-        let sample = context.preview.add()
-        scripts.selectSample(sample)
-        let savedEntry = context.catalog.entries.first { $0.destination.sampleID == sample }!
-        context.preview.scripts.removeAll { $0.id == sample || $0.id == "sample.cleanup" }
+        let requestID = try context.requests.add()
+        scripts.selectRequest(requestID)
+        let savedEntry = context.catalog.entries.first { $0.destination.requestID == requestID }!
+        try context.requests.remove(requestID)
         scripts.refreshValues()
-        assert(!context.catalog.entries.contains { $0.destination.sampleID == sample || $0.destination.sampleID == "sample.cleanup" })
-        assert(savedEntry.availability() != nil, "An already-rendered result explains that its sample was removed")
-        context.preview.reset(); scripts.refreshValues()
-        assert(context.catalog.entries.contains { $0.destination.sampleID == "sample.cleanup" })
-        assert(!context.catalog.entries.contains { $0.destination.sampleID == sample })
+        assert(!context.catalog.entries.contains { $0.destination.requestID == requestID })
+        assert(savedEntry.availability() != nil, "An already-rendered result explains removal")
+        try context.requests.reset(); scripts.refreshValues()
+        assert(context.requests.state.requests.isEmpty && context.requests.state.history.isEmpty)
 
         // Closing Settings preserves the application and its live runtime.
         let lifecycle = AppDelegate()

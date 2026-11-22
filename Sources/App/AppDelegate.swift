@@ -1,5 +1,6 @@
 import AppKit
 import CoreServices
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var context: SettingsContext?
@@ -8,24 +9,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var staticEffects: StaticEffectsController?
     private var quitting = false
     private var shutdownFinished = false
-    private var resetPermissionsOnQuit = false
+    private var freshInstallOnQuit = false
     func applicationWillFinishLaunching(_ notification: Notification) { createMenu() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let preferences = PreferenceStore()
         let logger = FileLogger()
-        let permissions = PermissionCoordinator()
-        let runtime = RuntimeCoordinator(preferences: preferences, permissions: permissions, logger: logger)
-        let login = LoginService(preferences: preferences)
-        context = SettingsContext(preferences: preferences, permissions: permissions, runtime: runtime, logger: logger, login: login)
-        context?.resetPermissionsAndQuit = { [weak self] in
-            guard let self = self, !self.quitting else { return }
-            self.resetPermissionsOnQuit = true
-            NSApp.terminate(nil)
+        let launchEvent = NSAppleEventManager.shared().currentAppleEvent
+        let launchProperties = launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))
+        let loginLaunch = launchProperties?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) || launchProperties?.forKeyword(AEKeyword(keyAELaunchedAsLogInItem)) != nil
+        let workers = WorkerLifecycle(defaults: preferences.defaults)
+        let power = AwakeSleepController(preferences: preferences, logger: logger, backend: SystemPowerBackend(workers: workers))
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await workers.prepareForLaunch { try await power.prepareHelperForUninstall() }
+            guard !self.quitting else { return }
+            if let error = workers.error {
+                let alert = NSAlert(); alert.messageText = "Couldn’t Update Jimmy Tweaks Workers"; alert.informativeText = error
+                alert.addButton(withTitle: "Open Login Items"); alert.addButton(withTitle: "Quit")
+                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+                NSApp.terminate(nil); return
+            }
+            let permissions = PermissionCoordinator()
+            let runtime = RuntimeCoordinator(preferences: preferences, permissions: permissions, logger: logger)
+            let context = SettingsContext(preferences: preferences, permissions: permissions, runtime: runtime, logger: logger, login: LoginService(preferences: preferences), awakeSleep: power, workers: workers)
+            self.context = context
+            context.resetAndUninstallWorkers = { [weak self] in
+                guard let self, !self.quitting else { return }
+                self.freshInstallOnQuit = true; NSApp.terminate(nil)
+            }
+            self.finishLaunching(context, loginLaunch: loginLaunch)
         }
-        menuBar = MenuBarController(preferences: preferences, openSettings: { [weak self] in self?.showSettings(nil) }, restoreIcons: { [weak self] in self?.context?.iconAbsorber.restoreAll() })
-        let event = NSAppleEventManager.shared().currentAppleEvent
-        let properties = event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))
-        let loginLaunch = properties?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) || properties?.forKeyword(AEKeyword(keyAELaunchedAsLogInItem)) != nil
+    }
+    private func finishLaunching(_ context: SettingsContext, loginLaunch: Bool) {
+        let preferences = context.preferences, logger = context.logger, runtime = context.runtime
+        menuBar = MenuBarController(preferences: preferences, openSettings: { [weak self] in self?.showSettings(nil) }, restoreIcons: { [weak self] in self?.context?.iconAbsorber.restoreAll() }, awakeSleep: context.awakeSleep)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
         logger.log("application", "launch", "version=\(version); build=\(build); session=\(UUID().uuidString); reason=\(loginLaunch ? "login" : "deliberate")")
@@ -36,7 +53,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !loginLaunch { showSettings(nil) }
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.quitting else { return }
-            self.context?.permissions.requestStartupPermissions()
+            self.context?.permissions.showStartupNotice { title, detail in
+                let alert = NSAlert(); alert.alertStyle = .informational
+                alert.messageText = title; alert.informativeText = detail
+                alert.addButton(withTitle: "OK")
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
         }
     }
     @objc func showSettings(_ sender: Any?) {
@@ -51,30 +74,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if shutdownFinished || context == nil { return .terminateNow }
         guard !quitting else { return .terminateLater }; quitting = true
         guard let context = context else { return .terminateNow }
+        settings?.window?.isRestorable = false; settings?.close(); settings = nil
         context.permissions.stopMonitoringForTermination()
+        context.requests.shutdown()
         staticEffects?.shutdown()
         menuBar?.shutdown()
         context.iconAbsorber.shutdown()
+        context.awakeSleep.shutdown { [weak self] powerResult in
+            if case .failure(let error) = powerResult {
+                context.logger.log("awake-sleep", "shutdown.restore.failure", error.localizedDescription, severity: "WARN")
+            }
+            self?.shutdownRuntime(context, powerResult: powerResult)
+        }
+        return .terminateLater
+    }
+    private func shutdownRuntime(_ context: SettingsContext, powerResult: Result<Void, Error>) {
         context.runtime.shutdown { [weak self] result in
             guard let self = self else { return }
-            if self.resetPermissionsOnQuit {
-                Task { @MainActor in
+            if self.freshInstallOnQuit {
+                Task { @MainActor [self] in
                     do {
                         try result.get()
+                        try powerResult.get()
+                        try await context.workers.uninstall { try await context.awakeSleep.prepareHelperForUninstall() }
                         try await PermissionResetter.reset(bundleIdentifier: Bundle.main.bundleIdentifier)
-                        context.logger.log("permissions", "reset", "App-scoped macOS privacy permission reset completed.")
+                        context.logger.shutdown { [weak self] in
+                            do {
+                                guard let id = Bundle.main.bundleIdentifier else { throw PermissionResetter.Failure.missingIdentity }
+                                try FreshInstallCleanup.removeUserData(bundleIdentifier: id, defaults: context.preferences.defaults)
+                            } catch { self?.showCleanupFailure(error, settingsPreserved: false) }
+                            self?.shutdownFinished = true; NSApp.reply(toApplicationShouldTerminate: true)
+                        }
                     } catch {
-                        context.logger.log("permissions", "reset.failure", error.localizedDescription, severity: "WARN")
-                        let alert = NSAlert(); alert.alertStyle = .warning
-                        alert.messageText = "Couldn’t Reset All Permissions"
-                        alert.informativeText = error.localizedDescription + " Jimmy Tweaks will quit. Reopen it before trying again."
-                        alert.addButton(withTitle: "Quit"); alert.runModal()
+                        context.logger.log("application", "cleanup.failure", error.localizedDescription, severity: "WARN")
+                        self.showCleanupFailure(error, settingsPreserved: true)
+                        self.finishTermination(context)
                     }
-                    self.finishTermination(context)
                 }
             } else { self.finishTermination(context) }
         }
-        return .terminateLater
+    }
+    private func showCleanupFailure(_ error: Error, settingsPreserved: Bool) {
+        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Cleanup Incomplete"
+        alert.informativeText = error.localizedDescription + (settingsPreserved ? " Your saved settings have been retained so you can reopen Jimmy Tweaks and retry cleanup." : " Some app data may remain. Reopen Jimmy Tweaks and retry cleanup.")
+        alert.addButton(withTitle: "Quit"); alert.runModal()
     }
     private func finishTermination(_ context: SettingsContext) {
         context.logger.log("application", "shutdown", "Explicit application quit.")

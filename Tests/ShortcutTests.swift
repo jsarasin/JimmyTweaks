@@ -204,11 +204,11 @@ enum ShortcutTests {
         var screenGranted = false
         let deniedListening = PermissionCoordinator(checkAccessibility:{false}, checkEventPosting:{false}, requestEventPosting:{false}, checkListening:{false}, requestListening:{ listeningRequests += 1; return false }, checkScreenRecording:{screenGranted})
         deniedListening.refresh(); check(listeningRequests == 0, "Permission polling never prompts for listening")
-        deniedListening.requestShortcutObservation(); deniedListening.requestShortcutObservation()
-        check(listeningRequests == 1 && !deniedListening.inputMonitoring, "Denied listening is requested only once explicitly")
+        deniedListening.request(.inputMonitoring); deniedListening.request(.inputMonitoring)
+        check(listeningRequests == 2 && !deniedListening.inputMonitoring, "Each explicit retry requests missing listening access")
         check(!deniedListening.screenRecording, "Screen Recording starts with its observed grant state")
         screenGranted = true; deniedListening.refresh()
-        check(deniedListening.screenRecording && listeningRequests == 1, "Permission refresh observes Screen Recording grants without requesting other access")
+        check(deniedListening.screenRecording && listeningRequests == 2, "Permission refresh observes Screen Recording grants without requesting other access")
         let controller = ShortcutController(preferences: preferences, permissions: permissions, logger: logger)
         var popupCount = 0; controller.runner.onEscape = { popupCount += 1 }
         a.actions = [ShortcutActionInstance(actionID:"builtin.delay", parameters:["seconds":"60"])]

@@ -1,19 +1,29 @@
 import AppKit
 import ApplicationServices
+import IOKit.hidsystem
+
+/// Native listening access can also be supplied by Accessibility. A successful
+/// check does not prove the separate Input Monitoring switch is enabled.
+struct InputMonitoringAccess {
+    var checkAccess: (IOHIDRequestType) -> IOHIDAccessType = IOHIDCheckAccess
+    var requestAccess: (IOHIDRequestType) -> Bool = IOHIDRequestAccess
+
+    func isGranted() -> Bool { checkAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted }
+    func request() -> Bool { requestAccess(kIOHIDRequestTypeListenEvent) }
+}
 
 final class PermissionCoordinator {
     private(set) var accessibility = false
     private(set) var eventPosting = false
     private(set) var inputMonitoring = false
     private(set) var screenRecording = false
-    private var requestedListening = false
-    private var requestedStartupPermissions = false
+    private var startupNoticeShown = false
     private var terminating = false
     var ready: Bool { accessibility && eventPosting }
-    var allGranted: Bool { ready && inputMonitoring && screenRecording }
+    var allGranted: Bool { ready && (inputMonitoring || accessibility) && screenRecording }
     var summary: String {
         if !accessibility { return "Permission Required — allow Jimmy Tweaks to control windows." }
-        if !eventPosting { return "Accessibility is granted. Waiting for macOS to make input control available; access is checked automatically." }
+        if !eventPosting { return "Device Control and Data Access is approved, but input control is unavailable. Use Request in Permissions or restart Jimmy Tweaks." }
         return "Ready — window control and input interception are available."
     }
     private var timer: Timer?
@@ -27,36 +37,36 @@ final class PermissionCoordinator {
     private let checkScreenRecording: () -> Bool
     private let requestAccessibility: () -> Bool
     private let requestScreenRecording: () -> Bool
+    private let settingsOpener: (URL) -> Bool
     init(checkAccessibility: @escaping () -> Bool = { AXIsProcessTrusted() },
          checkEventPosting: @escaping () -> Bool = { CGPreflightPostEventAccess() },
          requestEventPosting: @escaping () -> Bool = { CGRequestPostEventAccess() },
-         checkListening: @escaping () -> Bool = { CGPreflightListenEventAccess() },
-         requestListening: @escaping () -> Bool = { CGRequestListenEventAccess() },
+         checkListening: (() -> Bool)? = nil,
+         requestListening: (() -> Bool)? = nil,
          checkScreenRecording: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
          requestAccessibility: @escaping () -> Bool = {
              AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
          },
-         requestScreenRecording: @escaping () -> Bool = { CGRequestScreenCaptureAccess() }) {
+         requestScreenRecording: @escaping () -> Bool = { CGRequestScreenCaptureAccess() },
+         inputMonitoringAccess: InputMonitoringAccess = InputMonitoringAccess(),
+         settingsOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
         self.checkAccessibility = checkAccessibility
         self.checkEventPosting = checkEventPosting
         self.requestEventPosting = requestEventPosting
-        self.checkListening = checkListening; self.requestListening = requestListening
+        self.checkListening = checkListening ?? { inputMonitoringAccess.isGranted() }
+        self.requestListening = requestListening ?? { inputMonitoringAccess.request() }
         self.checkScreenRecording = checkScreenRecording
         self.requestAccessibility = requestAccessibility
         self.requestScreenRecording = requestScreenRecording
+        self.settingsOpener = settingsOpener
         refresh()
     }
     deinit { timer?.invalidate() }
     func refresh(notify: Bool = true) {
         guard !terminating else { return }
         let ax = checkAccessibility()
-        // Do not initialize the input-access check while Accessibility is denied.
-        // On a fresh AX grant, ask Core Graphics to acquire input access as well:
-        // polling its preflight alone can leave this process stuck waiting.
-        var posting = ax && checkEventPosting()
-        if ax && !accessibility && !posting {
-            posting = requestEventPosting()
-        }
+        // Checks must never request access, including after a fresh AX grant.
+        let posting = ax && checkEventPosting()
         let listening = checkListening()
         let recording = checkScreenRecording()
         let changed = accessibility != ax || eventPosting != posting || inputMonitoring != listening || screenRecording != recording
@@ -66,24 +76,54 @@ final class PermissionCoordinator {
         schedule()
         if changed && notify { NotificationCenter.default.post(name: .permissionsChanged, object: self) }
     }
-    /// Request missing access once per launch. Status polling never repeats these
-    /// requests; macOS owns approval and may suppress prompts after a denial.
-    func requestStartupPermissions() {
-        guard !terminating, !requestedStartupPermissions else { return }
-        requestedStartupPermissions = true
-        refresh()
-        if !accessibility { _ = requestAccessibility() }
-        requestShortcutObservation()
-        if !screenRecording { _ = requestScreenRecording() }
-        refresh()
+    var missingPermissions: [PermissionEntry] {
+        PermissionEntry.allCases.filter { permission in
+            switch permission {
+            case .accessibility: return !accessibility
+            case .inputMonitoring: return !inputMonitoring && !accessibility
+            case .screenRecording: return !screenRecording
+            }
+        }
     }
-    func requestShortcutObservation() {
+    /// Inform once per launch, including login launches. No system request is made.
+    func showStartupNotice(present: (String, String) -> Void) {
+        guard !terminating, !startupNoticeShown else { return }
+        startupNoticeShown = true
+        refresh()
+        let missing = missingPermissions
+        guard !missing.isEmpty else { return }
+        present("Permissions Not Approved", "The following permissions are not approved for Jimmy Tweaks:\n\n" +
+                missing.map { "• \($0.title)" }.joined(separator: "\n") +
+                "\n\nOpen Permissions in Jimmy Tweaks to request access and check for approval.")
+    }
+    /// Only explicit user actions may call this. A request is not an approval;
+    /// macOS may suppress prompts after denial, so recheck the observed grants.
+    func request(_ permission: PermissionEntry) {
         guard !terminating else { return }
-        if !inputMonitoring && !requestedListening { requestedListening = true; _ = requestListening() }
+        refresh()
+        switch permission {
+        case .accessibility:
+            if !accessibility { _ = requestAccessibility() }
+            refresh()
+            if accessibility && !eventPosting { _ = requestEventPosting() }
+        case .inputMonitoring:
+            // Always send an explicit request. Effective listening access may be
+            // inherited from AX while this app is absent from Input Monitoring.
+            _ = requestListening()
+        case .screenRecording:
+            if !screenRecording { _ = requestScreenRecording() }
+        }
         refresh()
     }
-    func openInputMonitoringSettings() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
+    func openSettings(for permission: PermissionEntry) {
+        switch permission {
+        case .accessibility: openSettings()
+        case .inputMonitoring: openInputMonitoringSettings()
+        case .screenRecording: openScreenRecordingSettings()
+        }
+    }
+    @discardableResult func openInputMonitoringSettings() -> Bool {
+        settingsOpener(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
     }
     func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)

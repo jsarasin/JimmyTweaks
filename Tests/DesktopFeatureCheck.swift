@@ -44,7 +44,10 @@ private final class FixtureAudio: OutputAudioHardware {
         let table = all.compactMap { $0 as? NSTableView }.first { $0.identifier?.rawValue == "settings.sidebar" }!
         print("Sidebar row geometry: \((0..<SettingsPage.allCases.count).map { table.rect(ofRow: $0).height }); spacing=\(table.intercellSpacing.height)")
         assert(abs(table.rect(ofRow: 0).height - table.intercellSpacing.height - 36) < 0.1)
-        assert((1..<SettingsPage.allCases.count).allSatisfy { abs(table.rect(ofRow: $0).height - table.intercellSpacing.height - 26) < 0.1 })
+        assert((1..<table.numberOfRows).allSatisfy {
+            let selectable = table.delegate?.tableView?(table, shouldSelectRow: $0) ?? true
+            return abs(table.rect(ofRow: $0).height - table.intercellSpacing.height - (selectable ? 26 : 16)) < 0.1
+        })
         let audio = all.compactMap { $0 as? ActionButton }.first { $0.identifier?.rawValue == "general.menuBarAudio" }!
         assert(audio.isEnabled && audio.state == .off)
         audio.performClick(nil)

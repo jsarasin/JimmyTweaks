@@ -142,7 +142,7 @@ final class AccessibilityWindows: WindowAccessing, @unchecked Sendable {
         let frame = CGRect(origin: point, size: extent)
         return WindowGeometry.valid(frame) ? frame : nil
     }
-    private static func localWindow(at point: CGPoint) -> NSWindow? {
+    static func localWindow(at point: CGPoint) -> NSWindow? {
         let screenPoint = CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - point.y)
         // AX has already identified our process. Do not fall through an owned
         // sheet, alert, menu, or popover to an underlying Settings window.

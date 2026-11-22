@@ -93,8 +93,8 @@ enum UI {
             label.stringValue = "Access is needed. Enable Jimmy Tweaks, then return here."
             label.textColor = .systemOrange
         } else if !permissions.eventPosting {
-            label.stringValue = "Access is granted. Waiting for macOS to make input control available."
-            label.textColor = .secondaryLabelColor
+            label.stringValue = "Permission approved; input control is unavailable. Use Request Device Control and Data Access or restart Jimmy Tweaks."
+            label.textColor = .systemOrange
         } else {
             label.stringValue = "Permissions granted"
             label.textColor = .systemGreen
@@ -115,7 +115,7 @@ enum UI {
     static func separator() -> NSView { let box = NSBox(); box.boxType = .separator; return box }
     static func scrollTable(_ table: NSTableView, height: CGFloat) -> NSScrollView {
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true; scroll.drawsBackground = false; scroll.borderType = .noBorder
+        scroll.autohidesScrollers = true; scroll.drawsBackground = false; scroll.borderType = .lineBorder
         scroll.heightAnchor.constraint(equalToConstant: height).isActive = true
         table.usesAlternatingRowBackgroundColors = false; table.backgroundColor = .clear
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
@@ -142,16 +142,25 @@ final class SettingsContext {
     let logger: FileLogger
     let login: LoginService
     let iconAbsorber: IconAbsorberController
-    let preview = ScriptsPreview()
+    let awakeSleep: AwakeSleepController
+    let workers: WorkerLifecycle
+    let requests: RequestController
     let catalog = SearchCatalog()
     var navigate: ((SearchDestination) -> Void)?
     var confirm: ((String, String, @escaping () -> Void) -> Void)?
     var showMessage: ((String, String) -> Void)?
     var refresh: (() -> Void)?
-    var resetPermissionsAndQuit: (() -> Void)?
-    init(preferences: PreferenceStore, permissions: PermissionCoordinator, runtime: RuntimeCoordinator, logger: FileLogger, login: LoginService, iconAbsorber: IconAbsorberController? = nil) {
+    var resetAndUninstallWorkers: (() -> Void)?
+    init(preferences: PreferenceStore, permissions: PermissionCoordinator, runtime: RuntimeCoordinator, logger: FileLogger, login: LoginService, iconAbsorber: IconAbsorberController? = nil, awakeSleep: AwakeSleepController? = nil, workers: WorkerLifecycle? = nil, requests: RequestController? = nil) {
         self.preferences = preferences; self.permissions = permissions; self.runtime = runtime; self.logger = logger; self.login = login
         self.iconAbsorber = iconAbsorber ?? IconAbsorberController(preferences: preferences, permissions: permissions, logger: logger)
+        self.workers = workers ?? WorkerLifecycle(defaults: preferences.defaults)
+        self.awakeSleep = awakeSleep ?? AwakeSleepController(preferences: preferences, logger: logger, backend: SystemPowerBackend(workers: self.workers))
+        #if TESTING
+        self.requests = requests ?? RequestController(preferences: preferences, store: RequestStore())
+        #else
+        self.requests = requests ?? RequestController(preferences: preferences, store: RequestStore(directory: RequestStore.defaultDirectory))
+        #endif
     }
     func openLog() {
         logger.flush { [weak self] result in
@@ -268,8 +277,15 @@ class SettingsPageController: NSViewController {
         guard let control = controls[id] else { return }
         focusHighlight?.cancel(); highlightedControl?.layer?.borderWidth = 0
         highlightedControl = control
-        control.scrollToVisible(control.bounds.insetBy(dx: -8, dy: -12))
+        // Scroll the page itself even when the destination is inside a nested
+        // editor/table scroll view, whose scrollToVisible would stop locally.
+        if let document = scroll.documentView {
+            let enclosing = control.enclosingScrollView
+            let target: NSView = enclosing != nil && enclosing !== scroll ? enclosing! : control
+            document.scrollToVisible(document.convert(target.bounds, from: target).insetBy(dx: -8, dy: -12))
+        }
         if let native = control as? NSControl, native.isEnabled { view.window?.makeFirstResponder(native) }
+        if let text = control as? NSTextView, text.isEditable { view.window?.makeFirstResponder(text) }
         control.wantsLayer = true
         control.layer?.borderColor = NSColor.controlAccentColor.cgColor; control.layer?.borderWidth = 2; control.layer?.cornerRadius = 5
         let highlight = DispatchWorkItem { [weak control] in control?.layer?.borderWidth = 0 }
