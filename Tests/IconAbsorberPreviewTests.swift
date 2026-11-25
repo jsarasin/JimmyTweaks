@@ -48,6 +48,16 @@ enum IconAbsorberPreviewTests {
         }
         assert(button().isEnabled && module.canInvokeStatusItems && !module.isHolding,
                "A compatibility pause must restore icons while leaving native preview invocation enabled")
+        let bar = MenuBarController(preferences: preferences, openSettings: {}, restoreIcons: { module.restoreAll() }, iconAbsorber: module)
+        let menu = bar.menuForTesting!
+        func menuRows() -> [NSMenuItem] { menu.items.filter { $0.representedObject is AbsorbedStatusItem } }
+        bar.menuNeedsUpdate(menu); bar.menuNeedsUpdate(menu)
+        assert(menuRows().count == 1 && menuRows()[0].title == item.name && menuRows()[0].image != nil,
+               "Reopening the J menu lists each selected status item once with its application name and fallback icon")
+        assert(menuRows()[0].isEnabled && menuRows()[0].image!.size.width <= 18 && menuRows()[0].image!.size.height <= 18)
+        menu.performActionForItem(at: menu.index(of: menuRows()[0]))
+        wait { calls.snapshot == [kAXPressAction] && module.invocationFailed }
+        calls.withValue { $0 = [] }
         button().performClick(nil)
         wait { calls.snapshot == [kAXPressAction] && module.invocationFailed }
         assert(module.state == "Compatibility Pause" && !module.isHolding, "Opening controls must preserve the hiding compatibility guard")
@@ -72,6 +82,9 @@ enum IconAbsorberPreviewTests {
 
         preferences.set(true, for: .suspended)
         assert(!button().isEnabled && message().stringValue.contains("Resume All"))
+        bar.menuNeedsUpdate(menu)
+        assert(menuRows().count == 1 && !menuRows()[0].isEnabled && menuRows()[0].toolTip?.contains("Resume All") == true,
+               "Suspension keeps absorbed items listed but disables their menu actions")
         let previous = calls.snapshot.count
         button().performClick(nil)
         button().rightMouseDown(with: NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
@@ -88,10 +101,27 @@ enum IconAbsorberPreviewTests {
         button().performClick(nil)
         wait { calls.snapshot.count == previous + 1 }
 
+        let second = AbsorbedStatusItem(id: "preview/second", bundle: item.bundle, name: item.name, pid: item.pid, index: 1,
+                                       identifier: "second", label: "Secondary Controls", element: item.element, frame: item.frame, actions: item.actions)
+        snapshot.withValue { $0.items = [second, item] }; module.refresh()
+        wait { module.items.count == 2 }
+        bar.menuNeedsUpdate(menu)
+        assert(menuRows().map(\.title) == ["Preview Fixture — Item 1", "Preview Fixture — Secondary Controls"],
+               "Multiple status items retain their native order and get distinct names")
+        snapshot.withValue { $0.items = [item] }; module.refresh()
+        wait { module.items.count == 1 }
+        bar.menuNeedsUpdate(menu)
+        assert(menuRows().map(\.title) == [item.name], "Disappearing status items are removed when the menu opens again")
         trusted = false; permissions.refresh()
         assert(!module.canInvokeStatusItems && message().stringValue.contains("Accessibility"), "Revoked access must explain blocked preview invocation")
         assert(module.invocationMessage == nil, "Cancellation must not leave a stale Opening Controls message")
-        module.shutdown(); runtime.shortcuts.shutdown(); window.orderOut(nil)
-        print("Icon Absorber preview regressions passed: native button routing during compatibility/helper failure, persistent errors, surface tracking, and disabled-click explanations. No real status item was invoked.")
+        bar.menuNeedsUpdate(menu)
+        assert(menuRows().isEmpty, "Revoking access removes stale menu discoveries")
+        module.restoreAll(); bar.menuNeedsUpdate(menu)
+        assert(menuRows().isEmpty && !menu.items.contains { $0.title == "Absorbed Icons" },
+               "Restore All removes the absorbed section while preserving the normal J menu")
+        assert(menu.items.contains { $0.title == "Settings…" } && menu.items.contains { $0.title == "Restore Absorbed Icons" })
+        bar.shutdown(); module.shutdown(); runtime.shortcuts.shutdown(); window.orderOut(nil)
+        print("Icon Absorber preview and J-menu regressions passed: named icons, native action routing, multiple/disappearing items, suspension/restoration, persistent errors, and surface tracking. No real status item was invoked.")
     }
 }

@@ -5,6 +5,7 @@ extension Notification.Name { static let awakeSleepChanged = Notification.Name("
 /// Main-thread owner of the desired session. Backend transitions are serialized; stale
 /// acquisitions are released before a replacement starts and can never fire a power action.
 final class AwakeSleepController {
+    private static let helperSetupFailedKey = WorkerLifecycle.setupFailedKey
     let preferences: PreferenceStore
     private let backend: PowerBackend
     private let logger: FileLogger
@@ -23,8 +24,20 @@ final class AwakeSleepController {
     private var warning: NSPanel?
     private var warningLabel: NSTextField?
     private let showsWarnings: Bool
-    var helperAvailable: Bool { backend.helperAvailable }
-    var helperStatus: String { backend.helperStatus }
+    private let presentHelperFailure: (NSAlert) -> Void
+    var helperSetupFailed: Bool { preferences.defaults.bool(forKey: Self.helperSetupFailedKey) || backend.helperDisabledUntilReset }
+    var helperAvailable: Bool { !helperSetupFailed && backend.helperAvailable }
+    var canConfigureHelper: Bool { !helperSetupFailed && backend.canConfigureHelper }
+    var powerActionsAllowed: Bool { backend.powerActionsAllowed }
+    var helperNeedsApproval: Bool { backend.helperNeedsApproval && !helperSetupFailed }
+    var helperStatus: String {
+        if backend.helperDisabledUntilReset {
+            return backend.helperStatus + " Use Reset Permissions and Uninstall Workers to clear disablement."
+        }
+        return helperSetupFailed && backend.powerActionsAllowed
+            ? "Closed-lid support is disabled after a setup failure. Use Reset Permissions and Uninstall Workers to clear it. Ordinary keep-awake remains available."
+            : backend.helperStatus
+    }
     var remaining: TimeInterval? { session?.remaining(at: now()) }
     var transitioning: Bool { busy || executing }
     var summary: String {
@@ -37,8 +50,13 @@ final class AwakeSleepController {
     }
     init(preferences: PreferenceStore, logger: FileLogger, backend: PowerBackend = SystemPowerBackend(),
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, automaticTimer: Bool = true,
-         observeSystem: Bool = true, showsWarnings: Bool = true) {
+         observeSystem: Bool = true, showsWarnings: Bool = true,
+         presentHelperFailure: @escaping (NSAlert) -> Void = { alert in
+             // Leave menu tracking before presenting the application-modal dialog.
+             DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true); alert.runModal() }
+         }) {
         self.preferences = preferences; self.logger = logger; self.backend = backend; self.now = now; self.showsWarnings = showsWarnings
+        self.presentHelperFailure = presentHelperFailure
         if observeSystem {
             observe(.default, .preferencesChanged, object: preferences) { [weak self] in self?.preferencesChanged() }
             let workspace = NSWorkspace.shared.notificationCenter
@@ -46,7 +64,9 @@ final class AwakeSleepController {
                 observe(workspace, name) { [weak self] in self?.cancel() }
             }
             observe(NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification) { [weak self] in self?.cancel() }
-            observe(.default, NSApplication.didBecomeActiveNotification) { [weak self] in self?.changed() }
+            observe(.default, NSApplication.didBecomeActiveNotification) { [weak self] in
+                self?.backend.refreshRecoveryState { [weak self] in self?.changed() }; self?.changed()
+            }
         }
         if automaticTimer {
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
@@ -61,9 +81,28 @@ final class AwakeSleepController {
         error = failure.localizedDescription
         logger.log("awake-sleep", "failure", error!, severity: "WARN"); changed()
     }
-    func configureHelper() { do { try backend.configureHelper(); error = nil; changed() } catch { report(error) } }
+    func configureHelper() {
+        guard canConfigureHelper else { return }
+        do { try backend.configureHelper(); error = nil; changed() }
+        catch {
+            let failure = error as? PowerHelperFailure
+            if failure == nil || failure?.untilReset == true {
+                preferences.defaults.set(true, forKey: Self.helperSetupFailedKey)
+            }
+            logger.log("awake-sleep", "helper-setup-failed", error.localizedDescription, severity: "WARN")
+            changed()
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Closed-Lid Support Unavailable"
+            alert.informativeText = error.localizedDescription + (helperSetupFailed
+                ? "\n\nClosed-lid support is permanently disabled until Reset Permissions and Uninstall Workers succeeds. Jimmy Tweaks will not retry setup, including after restarting the app. Ordinary keep-awake sessions are available once sleep restoration is confirmed."
+                : "\n\nUse the recovery instructions above. Other Jimmy Tweaks features remain available.")
+            alert.addButton(withTitle: "OK")
+            presentHelperFailure(alert)
+        }
+    }
     func start(_ action: PowerAction, duration: TimeInterval?) {
-        guard !stopped, !executing, !preferences.bool(.suspended) else { return }
+        guard !stopped, !executing, powerActionsAllowed, !preferences.bool(.suspended) else { return }
         guard let duration else {
             guard action == .keepAwake else { return }
             replace(PowerSession(id: UUID(), action: action, deadline: nil, duration: nil)); return
@@ -101,7 +140,7 @@ final class AwakeSleepController {
         }
         if active == nil, let desired = session {
             busy = true
-            backend.begin(session: desired.id, closedLid: backend.helperAvailable, display: preferences.bool(.keepDisplayAwake)) { [weak self] result in
+            backend.begin(session: desired.id, closedLid: helperAvailable, display: preferences.bool(.keepDisplayAwake)) { [weak self] result in
                 guard let self else { return }
                 self.busy = false
                 switch result {
@@ -125,6 +164,9 @@ final class AwakeSleepController {
         do { try backend.setDisplayAwake(preferences.bool(.keepDisplayAwake)) } catch { report(error); cancel() }
     }
     func tick() {
+        if !powerActionsAllowed {
+            backend.refreshRecoveryState { [weak self] in self?.changed() }
+        }
         guard !stopped, let session, active?.id == session.id, !busy else { return }
         let remaining = session.remaining(at: now())
         if !executing, let remaining, remaining <= 0 {
@@ -171,6 +213,7 @@ final class AwakeSleepController {
         }
     }
     func sleepNow() {
+        guard powerActionsAllowed else { return }
         let expected = intent &+ 1
         cancel { [weak self] result in
             guard let self, !self.stopped, self.session == nil, self.intent == expected, case .success = result else { return }

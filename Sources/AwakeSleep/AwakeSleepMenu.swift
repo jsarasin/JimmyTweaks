@@ -44,19 +44,19 @@ final class AwakeSleepMenu: NSObject {
     }
     func refresh() {
         status.title = controller.summary; status.isEnabled = false
-        error.title = controller.error.map { "Error: " + $0 } ?? ""; error.isEnabled = false; error.isHidden = controller.error == nil
+        error.title = "Session Failed — See Settings"; error.isEnabled = false; error.isHidden = controller.error == nil
         error.toolTip = controller.error
         for item in choices {
-            item.isEnabled = !controller.preferences.bool(.suspended) && !controller.transitioning
+            item.isEnabled = controller.powerActionsAllowed && !controller.preferences.bool(.suspended) && !controller.transitioning
             guard let choice = item.representedObject as? PowerMenuChoice else { continue }
             let seconds = choice.minutes.map { Double($0) * 60 }
             item.state = !choice.custom && controller.session?.action == choice.action && controller.session?.duration == seconds ? .on : .off
         }
         display.state = controller.preferences.bool(.keepDisplayAwake) ? .on : .off
         cancel.isEnabled = controller.session != nil || controller.transitioning
-        sleep.isEnabled = !controller.transitioning
-        support.title = controller.helperAvailable ? "Closed-Lid Helper Approved" : "Set Up Closed-Lid Helper…"
-        support.isEnabled = !controller.helperAvailable
+        sleep.isEnabled = controller.powerActionsAllowed && !controller.transitioning
+        support.title = controller.helperSetupFailed ? "Closed-Lid Helper Unavailable" : controller.helperAvailable ? "Closed-Lid Helper Approved" : controller.helperNeedsApproval ? "Open Login Items…" : !controller.powerActionsAllowed ? "Sleep Restoration Pending" : "Set Up Closed-Lid Helper…"
+        support.isEnabled = controller.canConfigureHelper
     }
     @objc private func start(_ item: NSMenuItem) {
         guard let choice = item.representedObject as? PowerMenuChoice else { return }

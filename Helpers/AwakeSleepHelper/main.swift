@@ -2,6 +2,7 @@ import Foundation
 import Security
 import SystemConfiguration
 import Darwin
+import os
 
 /// Root-only implementation. All state, including XPC calls and watchdog recovery,
 /// is serialized on the main queue. The protocol never accepts executable paths or commands.
@@ -32,12 +33,7 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate {
         return String(data: data, encoding: .utf8) ?? ""
     }
     static func sleepDisabled() throws -> Bool {
-        let text = try pmset(["-g"])
-        for line in text.split(separator: "\n") {
-            let fields = line.split(whereSeparator: { $0.isWhitespace })
-            if fields.count == 2, fields[0] == "SleepDisabled", ["0", "1"].contains(fields[1]) { return fields[1] == "1" }
-        }
-        throw AwakeSleepError.message("This macOS version does not report the closed-lid sleep override.")
+        try PowerHelperSafety.parseSleepDisabled(pmset(["-g"]))
     }
     private static func ensureDirectory(_ directory: URL) throws {
         if mkdir(directory.path, 0o700) != 0 && errno != EEXIST { throw AwakeSleepError.message("Could not create the sleep restoration journal directory.") }
@@ -54,6 +50,7 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate {
         let directory = URL(fileURLWithPath: "/var/db/" + service, isDirectory: true)
         try Self.ensureDirectory(directory)
         journalURL = directory.appendingPathComponent("restore.json")
+        helperLog.info("startup stage=journal-open")
         let url = journalURL
         lease = ClosedLidLease(read: Self.sleepDisabled, write: { value in
             _ = try Self.pmset(["-a", "disablesleep", value ? "1" : "0"])
@@ -75,8 +72,9 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate {
         super.init()
         if FileManager.default.fileExists(atPath: journalURL.path) {
             // Preserve a corrupt journal for diagnosis; never guess the prior system setting.
+            helperLog.info("startup stage=journal-recovery")
             let original = try JSONDecoder().decode(Bool.self, from: Data(contentsOf: journalURL))
-            do { try lease.recover(original: original) } catch { NSLog("Sleep recovery pending: %@", error.localizedDescription) }
+            do { try lease.recover(original: original) } catch { helperLog.error("recovery pending domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code, privacy: .public) detail=\(error.localizedDescription, privacy: .private)") }
         } else { _ = rmdir(directory.path) }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(100))
@@ -167,18 +165,39 @@ final class PowerEndpoint: NSObject, AwakeSleepHelperProtocol {
     }
 }
 
+private let helperLog = Logger(subsystem: "local.jimmytweaks.power-helper", category: "lifecycle")
+
 guard geteuid() == 0 else { fputs("AwakeSleepHelper must be launched by macOS as an approved daemon.\n", stderr); exit(1) }
+var stage = "executable-location"
+var recoveryPath: String?
 do {
-    var appURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-    for _ in 0..<4 { appURL.deleteLastPathComponent() }
-    guard let bundle = Bundle(url: appURL), bundle.bundleIdentifier != nil else { throw AwakeSleepError.message("The helper is not inside a Jimmy Tweaks app bundle.") }
+    helperLog.info("startup stage=executable-location")
+    let appURL = try PowerHelperSafety.enclosingApp(executable: PowerHelperSafety.executableURL())
+    stage = "bundle-validation"
+    guard let bundle = Bundle(url: appURL), let bundleID = bundle.bundleIdentifier,
+          bundleID.range(of: "^[A-Za-z0-9][A-Za-z0-9.-]+$", options: .regularExpression) != nil else {
+        throw AwakeSleepError.message("The helper has no valid enclosing application identity.")
+    }
     let service = PowerHelperIdentity.service(for: bundle)
+    // Establish the recovery location before any signature check can fail.
+    recoveryPath = "/var/db/" + service
+    helperLog.info("startup stage=bundle-validation path=\(appURL.path, privacy: .private)")
+    stage = "journal-recovery"
     let helper = try PowerHelper(service: service)
+    stage = "signature-validation"
+    helperLog.info("startup stage=signature-validation")
     let requirement = try PowerHelperIdentity.requirement(at: appURL)
+    stage = "listener-setup"
     let listener = NSXPCListener(machServiceName: service)
-    // Enforced by XPC for every message, including across exec/PID reuse. Ad-hoc builds
-    // use the exact main executable's designated requirement; distribution uses its signer.
+    // Enforced by XPC for every message, including across exec/PID reuse.
     listener.setConnectionCodeSigningRequirement(requirement)
     listener.delegate = helper; listener.resume()
+    helperLog.info("startup stage=listener-ready")
     withExtendedLifetime((helper, listener)) { dispatchMain() }
-} catch { NSLog("Power helper unavailable: %@", error.localizedDescription); exit(1) }
+} catch {
+    // An unknown recovery location must never suppress recovery restarts.
+    let recovery = recoveryPath.map { PowerHelperSafety.recoveryMayExist(at: $0) } ?? true
+    let code = PowerHelperSafety.terminalExitCode(recoveryMayExist: recovery)
+    helperLog.error("startup-failed stage=\(stage, privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code, privacy: .public) recovery=\(recovery, privacy: .public) exit=\(code, privacy: .public) detail=\(error.localizedDescription, privacy: .private)")
+    exit(code)
+}

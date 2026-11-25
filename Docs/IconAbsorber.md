@@ -79,6 +79,18 @@ sign the helper; distribution re-signs it before signing the enclosing app.
 
 ## Original controls and positioning
 
+The J menu bar icon's menu lists selected, available status items under **Absorbed
+Icons** while Icon Absorber is enabled. Each row shows the application name and
+its captured status icon, falling back to the application icon when no picture
+is available. Use **Refresh Icon Pictures** in Settings to capture original icons
+with the existing optional Screen Recording access. Applications with multiple
+status items get separate labeled or numbered rows, in the saved application
+order. The list refreshes whenever the menu opens. Choosing a row opens the
+application's original controls after the J menu closes, using the same temporary
+restoration and permission checks as the desktop preview. Suspended or otherwise
+blocked items remain listed with disabled actions; disabling the module removes
+the section.
+
 The default path temporarily releases hiding for the chosen application, waits
 for freshly discovered stable geometry, and invokes its original AXPress action.
 It does not synthesize a global left click or warp the pointer. Menu-close

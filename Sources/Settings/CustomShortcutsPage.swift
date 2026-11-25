@@ -33,9 +33,8 @@ final class CustomShortcutsPageController: SettingsPageController, NSTableViewDa
             retry?.isHidden = !service.needsObservationPermission && !service.needsInterceptionPermission
             captureLink?.isHidden = !self.context.preferences.shortcuts.flatMap(\.actions).contains { service.registry.definition($0.actionID)?.requiredPermissions.contains(.screenRecording) == true }
         }
-        prepare(shortcutsTable, columns: [("enabled", "", 34),("name","Name",180),("combination","Shortcut",170),("mode","Mode",90)])
+        prepare(shortcutsTable, columns: [("enabled", "Enabled", 65),("name","Name",180),("combination","Shortcut",170),("mode","Mode",90)])
         shortcutsTable.identifier = NSUserInterfaceItemIdentifier("shortcuts.list")
-        shortcutsTable.headerView = nil
         add(UI.scrollTable(shortcutsTable, height: 155))
         let plus = ActionButton("+") { [weak self] in self?.addShortcut() }; plus.setAccessibilityLabel("Add Shortcut")
         let minus = ActionButton("−") { [weak self] in self?.removeShortcut() }; minus.setAccessibilityLabel("Remove Shortcut")
@@ -90,7 +89,7 @@ final class CustomShortcutsPageController: SettingsPageController, NSTableViewDa
         issue.stringValue = context.runtime.shortcuts.message(for: shortcut); add(issue, to: configuration)
         add(UI.separator(), to: configuration); add(UI.label("Actions", size: 14, weight: .semibold), to: configuration)
         if actionsTable.tableColumns.isEmpty {
-            prepare(actionsTable, columns: [("action","Action",300)]); actionsTable.headerView = nil
+            prepare(actionsTable, columns: [("action","Action",300)])
             actionsTable.identifier = NSUserInterfaceItemIdentifier("shortcuts.actions")
             actionsTable.registerForDraggedTypes([dragType]); actionsTable.setDraggingSourceOperationMask(.move, forLocal: true)
         }
@@ -232,10 +231,14 @@ final class ShortcutActionPickerController: NSWindowController, NSWindowDelegate
         window.becomesKeyOnlyIfNeeded = false
         window.contentMinSize = NSSize(width: 430, height: 300)
         search.placeholderString = "Search actions"; search.delegate = self
-        table.headerView = nil; table.delegate = self; table.dataSource = self; table.rowHeight = 48
-        table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("action")))
+        table.delegate = self; table.dataSource = self; table.rowHeight = 48
+        let actionColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("action"))
+        actionColumn.title = "Action"; actionColumn.width = 480
+        table.addTableColumn(actionColumn)
+        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         table.target = self; table.doubleAction = #selector(addSelected)
         let scroll = NSScrollView(); scroll.documentView = table; scroll.hasVerticalScroller = true
+        scroll.borderType = .lineBorder; scroll.autohidesScrollers = true
         let add = ActionButton("Add") { [weak self] in self?.addSelected() }
         let cancel = ActionButton("Cancel") { [weak self] in self?.close() }
         cancel.keyEquivalent = "\u{1b}"

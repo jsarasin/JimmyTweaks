@@ -10,6 +10,7 @@ mkdir -p "$CONTENTS/Library/HelperTools" "$CONTENTS/Library/LaunchDaemons" "$POW
 xcrun swiftc -swift-version 5 -target arm64-apple-macosx27.0 -sdk "$(xcrun --show-sdk-path)" \
     -module-cache-path "$POWER_CACHE" -O -framework Foundation -framework Security -framework SystemConfiguration \
     "$PROJECT_ROOT/Sources/Core/AwakeSleep.swift" "$PROJECT_ROOT/Sources/AwakeSleep/PowerHelperProtocol.swift" \
+    "$PROJECT_ROOT/Sources/AwakeSleep/PowerHelperSupport.swift" \
     "$PROJECT_ROOT/Helpers/AwakeSleepHelper/main.swift" -o "$CONTENTS/Library/HelperTools/AwakeSleepHelper"
 codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --identifier "$POWER_SERVICE" --options runtime "$CONTENTS/Library/HelperTools/AwakeSleepHelper"
 cat > "$CONTENTS/Library/LaunchDaemons/AwakeSleepHelper.plist" <<EOF
@@ -20,7 +21,7 @@ cat > "$CONTENTS/Library/LaunchDaemons/AwakeSleepHelper.plist" <<EOF
 <key>BundleProgram</key><string>Contents/Library/HelperTools/AwakeSleepHelper</string>
 <key>MachServices</key><dict><key>$POWER_SERVICE</key><true/></dict>
 <key>RunAtLoad</key><true/>
-<key>KeepAlive</key><true/>
+<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 <key>ProcessType</key><string>Background</string>
 <key>AssociatedBundleIdentifiers</key><array><string>$POWER_BUNDLE_ID</string></array>
 </dict></plist>

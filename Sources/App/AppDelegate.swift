@@ -17,16 +17,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let launchProperties = launchEvent?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))
         let loginLaunch = launchProperties?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) || launchProperties?.forKeyword(AEKeyword(keyAELaunchedAsLogInItem)) != nil
-        let workers = WorkerLifecycle(defaults: preferences.defaults)
-        let power = AwakeSleepController(preferences: preferences, logger: logger, backend: SystemPowerBackend(workers: workers))
+        let workers = WorkerLifecycle(defaults: preferences.defaults, log: { event, detail in
+            logger.log("power-helper", event, detail, severity: "WARN")
+        })
+        let power = AwakeSleepController(preferences: preferences, logger: logger, backend: SystemPowerBackend(workers: workers, logger: logger))
         Task { @MainActor [weak self] in
             guard let self else { return }
             await workers.prepareForLaunch { try await power.prepareHelperForUninstall() }
             guard !self.quitting else { return }
-            if let error = workers.error {
-                let alert = NSAlert(); alert.messageText = "Couldn’t Update Jimmy Tweaks Workers"; alert.informativeText = error
-                alert.addButton(withTitle: "Open Login Items"); alert.addButton(withTitle: "Quit")
-                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+            if let error = workers.blockingError {
+                let alert = NSAlert(); alert.messageText = "Couldn’t Start Jimmy Tweaks"; alert.informativeText = error
+                alert.addButton(withTitle: "Quit"); alert.runModal()
                 NSApp.terminate(nil); return
             }
             let permissions = PermissionCoordinator()
@@ -42,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func finishLaunching(_ context: SettingsContext, loginLaunch: Bool) {
         let preferences = context.preferences, logger = context.logger, runtime = context.runtime
-        menuBar = MenuBarController(preferences: preferences, openSettings: { [weak self] in self?.showSettings(nil) }, restoreIcons: { [weak self] in self?.context?.iconAbsorber.restoreAll() }, awakeSleep: context.awakeSleep)
+        menuBar = MenuBarController(preferences: preferences, openSettings: { [weak self] in self?.showSettings(nil) }, restoreIcons: { [weak self] in self?.context?.iconAbsorber.restoreAll() }, awakeSleep: context.awakeSleep, iconAbsorber: context.iconAbsorber)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
         logger.log("application", "launch", "version=\(version); build=\(build); session=\(UUID().uuidString); reason=\(loginLaunch ? "login" : "deliberate")")

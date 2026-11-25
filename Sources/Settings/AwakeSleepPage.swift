@@ -32,7 +32,7 @@ final class AwakeSleepPageController: SettingsPageController {
         action("Cancel Session", id: "awakeSleep.cancel", description: "Cancel the active power session and restore normal sleep behavior.", keywords: ["stop", "awake", "timer"], to: current,
                enabled: { power.session != nil || power.transitioning }) { power.cancel() }
         action("Stop & Sleep Now", id: "awakeSleep.sleepNow", description: "End the active session, restore the sleep setting, and immediately request system sleep.", keywords: ["lid", "manual sleep"], to: current,
-               enabled: { !power.transitioning }) { power.sleepNow() }
+               enabled: { power.powerActionsAllowed && !power.transitioning }) { power.sleepNow() }
         refreshers.append { [weak summary, weak failure] in
             summary?.stringValue = power.summary; failure?.stringValue = power.error ?? ""; failure?.isHidden = power.error == nil
         }
@@ -50,7 +50,7 @@ final class AwakeSleepPageController: SettingsPageController {
             metadata(picker, id: "awakeSleep.\(choice.rawValue).duration", label: "\(choice.title) Duration", description: "Choose a preset or custom duration in hours and minutes.", keywords: ["power", "timer", "amphetamine"], section: "Start a Session")
             metadata(start, id: "awakeSleep.\(choice.rawValue).start", label: choice.title, description: "Start a \(choice.title.lowercased()) session. Sleep and shutdown timers keep the computer awake until they finish.", keywords: ["power", "timer", "awake", "shutdown", "sleep"], section: "Start a Session")
             refreshers.append { [weak start, weak picker] in
-                start?.isEnabled = !power.preferences.bool(.suspended) && !power.transitioning
+                start?.isEnabled = power.powerActionsAllowed && !power.preferences.bool(.suspended) && !power.transitioning
                 picker?.isEnabled = !power.preferences.bool(.suspended)
             }
         }
@@ -58,8 +58,13 @@ final class AwakeSleepPageController: SettingsPageController {
         add(UI.caption("Sleep and shutdown show a cancellable warning in their final 30 seconds. Quit, Suspend All, logout, or system sleep cancels the session."), to: timers)
         let helper = card("Closed-Lid Support")
         let status = UI.caption(""); add(status, to: helper)
-        action("Set Up Closed-Lid Helper…", id: "awakeSleep.helper", description: "Register the power helper and open macOS approval settings when needed. Administrator approval is required.", keywords: ["lid", "clamshell", "administrator", "power", "permission"], to: helper) { power.configureHelper() }
-        refreshers.append { [weak status] in status?.stringValue = power.helperStatus }
+        let setup = action("Set Up Closed-Lid Helper…", id: "awakeSleep.helper", description: "Register the power helper and open macOS approval settings when needed. Administrator approval is required.", keywords: ["lid", "clamshell", "administrator", "power", "permission"], to: helper,
+               enabled: { power.canConfigureHelper }) { power.configureHelper() }
+        refreshers.append { [weak status, weak setup] in
+            status?.stringValue = power.helperStatus
+            let title = power.helperNeedsApproval ? "Open Login Items…" : "Set Up Closed-Lid Helper…"
+            setup?.title = title; setup?.setAccessibilityLabel(title)
+        }
         add(UI.caption("With the helper approved, sessions temporarily override system sleep on battery and external power. Normal Sleep commands may be blocked: use Stop & Sleep Now to end the override first. Without approval, sessions prevent idle sleep only. macOS emergency power protections still apply."), to: helper)
     }
 }
